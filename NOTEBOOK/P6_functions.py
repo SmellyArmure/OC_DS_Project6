@@ -47,6 +47,16 @@ def plot_wordclouds_topwords(H, n_top_words, n_rows=1, figsize=(18,8),
         
     plt.show()
 
+'''Computes the projection of the observations of df on the two first axes of
+a transformation (PCA, UMAP or t-SNE)
+The center option (clustering model needed) allows to project the centers
+on the two axis for further display, and to return the fitted model
+NB: if the model wa already fitted, does not refit.'''
+
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+from umap import UMAP
+from sklearn.manifold import TSNE
 
 def prepare_2D_axes(df, ser_clust=None, proj=['PCA', 'UMAP', 't-SNE'],
                     model=None, centers_on=False, random_state=14):
@@ -114,6 +124,7 @@ def prepare_2D_axes(df, ser_clust=None, proj=['PCA', 'UMAP', 't-SNE'],
 with clusters coloring if model available (grey if no model given).
 NB: if the model wa already fitted, does not refit.'''
 
+import seaborn as sns
 
 def plot_projection(df, model=None, ser_clust = None, proj='PCA', title=None,
                     figsize=(5, 3), size=1, palette='tab10',
@@ -207,7 +218,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 applies a preprocessing function if given (stopwords, stemming...)
 then turn the descriptions in vectors (bow of tf-idf, depending on the avlue of
  tfidf_on)
- returns document term matrix as a dataframe and new actualized stopwords list
+ returns document term matrix as a dataframe and the list of new excluded words.
 '''
 
 def compute_doc_terms_df(ser_desc, 
@@ -253,10 +264,8 @@ def compute_doc_terms_df(ser_desc,
                 index=ser_desc.index, # each item
                 columns=doc_term_voc) # each word
 
-    actualized_sw = new_sw.union(sw)
-
-    # document term matrix as a dataframe and new actualized stopwords list
-    return doc_term_df, actualized_sw
+    # document term matrix as a dataframe and the list of new excluded words
+    return doc_term_df, new_sw
 
 
 
