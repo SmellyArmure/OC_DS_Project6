@@ -301,3 +301,38 @@ the {term_doc_df.shape[1]} existing in our descriptions,\ni.e. \
     w2v_emb_df = term_doc_df[li_common_words].dot(word_vectors_df)
 
     return w2v_emb_df
+
+
+''' Takes an image, resizes the image and fills the non existing space
+with white 
+'''
+
+import cv2
+import numpy as np
+from PIL import Image, ImageOps
+from PIL.ImageFilter import GaussianBlur
+
+def preproc_image(img, size=224, fill_col=(255,255,255),
+                  autocontrast = False, equalize=False,
+                  gauss_blur = None, interpolation=cv2.INTER_AREA):
+
+    img = Image.fromarray(img)
+    if autocontrast:
+        img = ImageOps.autocontrast(img)
+    if equalize:
+        img = ImageOps.equalize(img)
+    if gauss_blur is not None:
+        img = img.filter(GaussianBlur(radius=gauss_blur))
+
+    w, h = img.size
+    if h == w:
+        new_img = img
+    else:
+        dif = h if h > w else w
+        new_img = Image.new('RGB', (dif, dif), fill_col)
+        new_img.paste(img, (int((dif - w) / 2), int((dif - h) / 2)))
+
+    return cv2.resize(np.asarray(new_img), (size, size), interpolation)
+
+
+
