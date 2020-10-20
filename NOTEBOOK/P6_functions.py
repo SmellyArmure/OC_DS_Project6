@@ -336,3 +336,340 @@ def preproc_image(img, size=224, fill_col=(255,255,255),
 
 
 
+""" For a each number of clusters in a list ('list_n_clust'),
+- runs iterations ('n_iter' times) of a KMeans on a given dataframe,
+- computes the 4 scores : silhouette, davies-bouldin, calinski_harabasz and
+distortion
+- if enabled only('return_pop'): the proportion (pct) of the clusters
+for each iteration and number of clusters
+- and returns 3 dictionnaries:
+    - dict_scores_iter: the 4 scores
+    - dict_ser_clust_n_clust: the list of clusters labels for df rows
+    - if enabled only (return_pop), 'dict_pop_perc_n_clust' : the proportions
+
+NB: the functions 'plot_scores_vs_n_clust', 'plot_prop_clust_vs_nclust' and
+'plot_clust_prop_pie_vs_nclust' plot
+respectively:
+- the scores vs the number of clusters,
+- the proportion of clusters
+- and the pies of the clusters ratio,
+ based on the dictionnaries provided by compute_clust_scores_nclust"""
+
+
+from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
+from sklearn.cluster import KMeans
+from sklearn.mixture import GaussianMixture
+from sklearn.cluster import AgglomerativeClustering
+from sklearn.ensemble import RandomForestClassifier
+
+def compute_clust_scores_nclust(df, df_fit=None, model=None, n_iter=10, inertia=True,
+                                list_n_clust=range(2,8), return_pop=False):
+#### ATTENTION AU CAS PAR CAS POUR LES MODELES AUTRES QUE KMEANS
+
+    dict_pop_perc_n_clust = {}
+    dict_ser_clust_n_clust = {}
+    dict_scores_iter = {}
+
+    df_fit = df if df_fit is None else df_fit
+    km_default = True if model is None else False
+    ahc = True if model == 'ahc' else False
+    gmm = True if model == 'gmm' else False
+
+    # --- Looping on the number of clusters to compute the scores
+    for i, n_clust in enumerate(list_n_clust,1):
+
+        silh, dav_bould, cal_harab, distor = [], [], [], []
+        pop_perc_iter, ser_clust_iter = pd.DataFrame(), pd.DataFrame()
+
+        # Iterations of the same model (stability)
+        for j in range(n_iter):
+            if km_default:
+                model = KMeans(n_clusters=n_clust,
+                               random_state=np.random.randint(100))
+            elif ahc:
+                ahc = AgglomerativeClustering(n_clusters=n_clust)
+                clf = RandomForestClassifier(random_state=np.random.randint(100))
+                model = InductiveClusterer(ahc, clf)
+            elif gmm:
+                # reinitialisation of the random state (gmm)
+                model = GaussianMixture(n_components=n_clust,
+                                        covariance_type='spherical',
+                                        random_state=np.random.randint(100))
+            else:
+                print("ERROR: unknown model asked")
+            model.fit(df_fit)
+            ser_clust = pd.Series(data=model.predict(df),
+                                  index=df.index,
+                                  name="iter_"+str(j))
+            ser_clust_iter = pd.concat([ser_clust_iter, ser_clust.to_frame()],
+                                       axis=1)
+
+            if return_pop:
+                # Compute pct of clients in each cluster
+                pop_perc = 100 * ser_clust.value_counts() / df.shape[0]
+                pop_perc.sort_index(inplace=True)
+                pop_perc.index = ['clust_'+str(i) for i in pop_perc.index]
+                pop_perc_iter = pd.concat([pop_perc_iter, pop_perc.to_frame()],
+                                          axis=1)
+        
+            # Computing scores for iterations
+            silh.append(silhouette_score(X=df, labels=ser_clust))
+            dav_bould.append(davies_bouldin_score(X=df, labels=ser_clust))
+            cal_harab.append(calinski_harabasz_score(X=df, labels=ser_clust))
+            if inertia: distor.append(model.inertia_)
+
+        dict_ser_clust_n_clust[n_clust] = ser_clust_iter
+
+        if return_pop:
+            # dict of the population (pct) of clusters iterations
+             dict_pop_perc_n_clust[n_clust] = pop_perc_iter.T
+
+        # Dataframe of the results on iterations
+        scores_iter = pd.DataFrame({'Silhouette': silh,
+                                    'Davies_Bouldin': dav_bould,
+                                    'Calinsky_Harabasz': cal_harab,
+                                    })
+        if inertia:
+            scores_iter['Distortion'] = distor
+        dict_scores_iter[n_clust] = scores_iter
+
+    if return_pop:
+        return dict_scores_iter, dict_ser_clust_n_clust, dict_pop_perc_n_clust
+    else:
+        return dict_scores_iter, dict_ser_clust_n_clust
+
+
+''' Plot the 4 mean scores stored in the dictionnary returned by the function
+compute_clust_scores_nclust (dictionnary of dataframes of scores (columns)
+for each iteration (rows) of the model and for each number of clusters
+in a figure with error bars (2 sigmas)'''
+
+def plot_scores_vs_n_clust(dict_scores_iter, figsize=(15,3)):
+
+    fig = plt.figure(figsize=figsize)
+    list_n_clust = list(dict_scores_iter.keys())
+
+    # Generic fonction to unpack dictionary and plot one graph
+    def score_plot_vs_nb_clust(scores_iter, name, ax, c=None):
+        score_mean = [dict_scores_iter[i].mean().loc[n_score] for i in list_n_clust]
+        score_std = np.array([dict_scores_iter[i].std().loc[n_score]\
+                            for i in list_n_clust])
+        ax.errorbar(list_n_clust, score_mean, yerr=2*score_std, elinewidth=1,
+                capsize=2, capthick=1, ecolor='k', fmt='-o', c=c, ms=5,
+                barsabove=False, uplims=False)
+
+    li_scores = ['Silhouette', 'Davies_Bouldin',
+                 'Calinsky_Harabasz', 'Distortion']
+    li_colors = ['r', 'b', 'purple', 'g']
+
+    # Looping on the 4 scores
+    i=0
+    for n_score, c in zip(li_scores, li_colors):
+        i+=1
+        ax = fig.add_subplot(1,4,i)
+        
+        score_plot_vs_nb_clust(dict_scores_iter, n_score, ax, c=c)
+        ax.set_xlabel('Number of clusters')
+        ax.set_ylabel(n_score+' score')
+
+    fig.suptitle('Clustering score vs. number of clusters',
+                fontsize=14, fontweight='bold')
+    plt.tight_layout(rect=[0,0,1,0.95])
+    plt.show()
+
+
+''' Plot the proportion (%) of each cluster (columns) returned by the function
+compute_clust_scores_nclust (dictionnary of dataframes of the proportion
+for each iteration (rows) of the model in one figure with error bars (2 sigmas)'''
+
+def plot_prop_clust_vs_nclust(dict_pop_perc_n_clust, figsize=(15,3)):
+
+    fig = plt.figure(figsize=figsize)
+    list_n_clust = list(dict_pop_perc_n_clust.keys())
+    
+
+    for i, n_clust in enumerate(list_n_clust, 1):
+        n_iter = dict_pop_perc_n_clust[n_clust].shape[0]
+        ax = fig.add_subplot(3,3,i)
+        sns.stripplot(data=dict_pop_perc_n_clust[n_clust],
+                      edgecolor='k', linewidth=1,  ax=ax)
+        ax.set(ylim=(0,100))
+        ax.set_ylabel("prop. of the clusters (%)")
+    fig.suptitle(f"Proportion of the clusters through {n_iter} iterations",
+                fontweight='bold', fontsize=14)
+    plt.tight_layout(rect=[0,0,1,0.97])
+
+
+""" Plot pies of the proportion of the clusters using the proportions
+stored in the dictionnary returned by the function
+'compute_clust_scores_nclust' (dictionnary of dataframes of the
+proportions (columns) for each iteration (rows) of the model
+and for each number of clusters in a figure with error (+/-2 sigmas)"""
+
+def plot_clust_prop_pie_vs_nclust(dict_pop_perc_n_clust,
+                                  list_n_clust, figsize=(15, 3)):
+
+    fig = plt.figure(figsize=figsize)
+
+    for i, n_clust in enumerate(list_n_clust,1):
+        ax = fig.add_subplot(str(1) + str(len(list_n_clust)) + str(i))
+
+        mean_ = dict_pop_perc_n_clust[n_clust].mean()
+        std_ = dict_pop_perc_n_clust[n_clust].std()
+        
+        wedges, texts, autotexts = ax.pie(mean_,
+                autopct='%1.0f%%',
+                labels=["(+/-{:.0f})".format(i) for i in std_.values],
+                pctdistance=0.5)
+        plt.setp(autotexts, size=10, weight="bold")
+        plt.setp(texts, size=8)
+        ax.set_title(f'{str(n_clust)} clusters')  # , pad=20
+
+    fig.suptitle('Clusters ratio', fontsize=16, fontweight='bold')
+    plt.show()
+
+
+''' Plots on the left the silhouette scores of each cluster and
+on the right the projection of the points with cluster labels as cluster'''
+
+from sklearn.metrics import silhouette_score, silhouette_samples
+
+def silh_scores_vs_n_clust(df, n_clust, proj='PCA',
+                           xlim=(-0.1, 0.8), figsize=(18, 3), palette='tab10'):
+    
+    palette = sns.color_palette(palette, np.max(n_clust))
+    colors = palette.as_hex()
+
+    distor = []
+    for n in n_clust:
+        fig = plt.figure(1, figsize=figsize)
+
+        # --- Plot 1: Silhouette scores
+        ax1 = fig.add_subplot(121)
+
+        model = KMeans(n_clusters=n, random_state=14)
+        model = model.fit(df)
+
+        ser_clust = pd.Series(model.predict(df),
+                              index=df.index,
+                              name='Clust')
+        distor.append(model.inertia_)
+        sample_silh_val = silhouette_samples(df, ser_clust)
+
+        y_lower = 10
+        # colors = [colors[x] for x in ser_clust.astype('int')]
+        for i in range(n):
+            # Aggregate and sort silh scores for samples of clust i
+            clust_silh_val = sample_silh_val[ser_clust == i]
+            clust_silh_val.sort()
+            size_clust = clust_silh_val.shape[0]
+            y_upper = y_lower + size_clust
+            ax1.fill_betweenx(np.arange(y_lower, y_upper),
+                              0,
+                              clust_silh_val,
+                              facecolor=colors[i],
+                              edgecolor=colors[i],
+                              alpha=0.7)
+
+            # Label of silhouette plots with their clust. nb. at the middle
+            ax1.text(-0.05, y_lower + 0.5 * size_clust, str(i))
+
+            # Computes the new y_lower for next plot
+            y_lower = y_upper + 10  # 10 for the 0 samples
+
+        silhouette_avg = silhouette_score(df, ser_clust)
+        ax1.set_title("Nb of clusters: {} | Avg silhouette: {:.3f}" \
+                      .format(n, silhouette_avg), fontsize=12)
+        ax1.set_xlabel("Silhouette coeff. values")
+        ax1.set_ylabel("Cluster label")
+
+        # The vertical line for average silhouette score of all the values
+        ax1.axvline(x=silhouette_avg, color="red", linestyle="--")
+        ax1.set_yticks([])  # Clear the yaxis labels / ticks
+        ax1.set_xticks([-0.1, 0, 0.2, 0.4, 0.6, 0.8, 1])
+        ax1.set_xlim(list(xlim))
+        # (n+1)*10: inserting blank spaces between clusters silh scores
+        ax1.set_ylim([0, df.shape[0] + (n + 1) * 10])
+
+        # --- Plot 2: Showing clusters on chosen projection
+        ax2 = fig.add_subplot(122)
+        # uses already fitted model
+        plot_projection(df, model=model,
+                        proj=proj,
+                        palette=palette,
+                        fig=fig, ax=ax2)
+
+        ax2.set_title('projection: ' + proj, fontsize=12)
+
+        plt.suptitle("Silhouette analysis for {} clusters".format(n),
+                     fontsize=14, fontweight='bold')
+        plt.tight_layout(rect=[0, 0, 1, 0.95])
+        plt.show()
+
+
+''' Generates the list of all unique combination of k numbers 
+(no matter the order) among a given seq list of objects'''
+
+def combinlist(seq, k):
+    p = []
+    i, imax = 0, 2**len(seq)-1
+    while i<=imax:
+        s = []
+        j, jmax = 0, len(seq)-1
+        while j<=jmax:
+            if (i>>j)&1==1:
+                s.append(seq[j])
+            j += 1
+        if len(s)==k:
+            p.append(s)
+        i += 1
+    return p
+
+
+'''Takes a dataframe of clusters number (prediction) for a set of observation, 
+and computes the ARI score between pairs of columns.
+Two modes are available:
+- first_vs_others=False: to check the initialisation stability.
+The columns are obtains for n_columns iterations of the same model
+with different initialisation
+- first_vs_others=True: to compare the predictions obtained with the whole
+dataset (first column) and predictions obtained with a sample
+(the other columns)
+Return a pd.Series of the ARI scores (values) for each pair of columns (index).
+'''
+
+from sklearn.metrics import adjusted_rand_score
+
+def ARI_column_pairs(df_mult_ser_clust, first_vs_others=False, print_opt=True):
+
+    n_columns = len(df_mult_ser_clust.columns)
+    n_clust = df_mult_ser_clust.stack().nunique()
+    
+    # Computes ARI scores for each pair of models
+    ARI_scores = []
+    if first_vs_others: # first columns versus the others
+        pairs_list = [[df_mult_ser_clust.columns[0],
+                       df_mult_ser_clust.columns[i]] \
+                      for i in range(1, n_columns)]
+        if print_opt: print("--- ARI between first and the {} others ---"\
+                            .format(n_columns-1))
+        name = f'ARI_{str(n_clust)}_clust_first_vs_others'
+    else: # all pairs
+        pairs_list = combinlist(df_mult_ser_clust.columns,2)
+        if print_opt: print("--- ARI all {} unique pairs ---"\
+                            .format(len(pairs_list)))
+        name = f'ARI_{str(n_clust)}_clust_all_pairs'
+
+    for i, j in pairs_list:
+        ARI_scores.append(adjusted_rand_score(df_mult_ser_clust.loc[:,i],
+                                              df_mult_ser_clust.loc[:,j]))
+
+    # Compute the mean and standard deviation of ARI scores
+    ARI_mean, ARI_std = np.mean(ARI_scores), np.std(ARI_scores)
+    ARI_min, ARI_max = np.min(ARI_scores), np.max(ARI_scores)
+    if print_opt: print("ARI: mean={:.3f}, std={:.3f}, min={:.3f}, max={:.3f} "\
+            .format(ARI_mean, ARI_std, ARI_min, ARI_max))
+
+    return pd.Series(ARI_scores, index=pd.Index(pairs_list),
+                     name=name)
+
