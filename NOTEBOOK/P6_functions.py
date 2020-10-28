@@ -6,17 +6,41 @@ def print_null_pct(df):
     tot_null = df.isna().sum().sum()
     print('nb of null: ', tot_null, '\npct of null: ',
         '{:.1f}'.format(tot_null*100/(df.shape[0]*df.shape[1])))
-    
 
-'''Computes the projection of the observations of df on the two first axes of
-a transformation (PCA, UMAP or t-SNE)
-The center option (clustering model needed) allows to project the centers
-on the two axis for further display, and to return the fitted model
-NB: if the model wa already fitted, does not refit.'''
+# Plotting heatmap (2 options available, rectangle or triangle )
 
-from sklearn.decomposition import PCA
-from umap import UMAP
-from sklearn.manifold import TSNE
+import seaborn as sns
+import pandas as pd
+import matplotlib.pyplot as plt
+
+
+def plot_heatmap(corr, title, figsize=(8, 4), vmin=-1, vmax=1, center=0,
+                 palette=sns.color_palette("coolwarm", 20), shape='rect',
+                 fmt='.2f', robust=False, fig=None, ax=None):
+    fig = plt.figure(figsize=figsize) if fig is None else fig
+    ax = fig.add_subplot(111) if ax is None else ax
+
+    if shape == 'rect':
+        mask = None
+    elif shape == 'tri':
+        mask = np.zeros_like(corr, dtype=np.bool)
+        mask[np.triu_indices_from(mask)] = True
+    else:
+        print('ERROR : this type of heatmap does not exist')
+
+    palette = palette
+    ax = sns.heatmap(corr, mask=mask, cmap=palette, vmin=vmin, vmax=vmax,
+                     center=center, annot=True, annot_kws={"size": 10}, fmt=fmt,
+                     square=False, linewidths=.5, linecolor='white',
+                     cbar_kws={"shrink": .9, 'label': None}, robust=robust,
+                     xticklabels=corr.columns, yticklabels=corr.index,
+                     ax=ax)
+    ax.tick_params(labelsize=10, top=False, bottom=True,
+                   labeltop=False, labelbottom=True)
+    ax.collections[0].colorbar.ax.tick_params(labelsize=10)
+    plt.setp(ax.get_xticklabels(), rotation=25, ha="right", rotation_mode="anchor")
+    ax.set_title(title, fontweight='bold', fontsize=12)
+
 
 
 '''Takes the H matrix (topics/words) as a dataframe, extracts the n top words
@@ -844,7 +868,7 @@ class CustTransformer(BaseEstimator):
                                 index=X.index,
                                 columns=self.get_feature_names(X, y))
 
-    
+
 
 '''
 Takes two series giving for each row :
@@ -856,3 +880,254 @@ The best bijective correspondance between categories and clusters is obtained by
  list(zip(result.columns, result.index))
 '''
 
+from sklearn.preprocessing import FunctionTransformer
+from scipy.optimize import linear_sum_assignment
+
+def confusion_matrix_clust(true_cat, clust_lab, normalize=False,
+                           margins_sums=False, margins_score=False):
+
+    ### Count the number of articles in eact categ/clust pair
+    cross_tab = pd.crosstab(true_cat, clust_lab,
+                         normalize=normalize)
+
+    ### Rearrange the lines and columns to maximize the diagonal values sum
+    # Take the invert values in the matrix
+    func = lambda x: 1/(x+0.0000001)
+    inv_func = lambda x: (1/x) - 0.0000001
+    funct_trans = FunctionTransformer(func, inv_func)
+    inv_df = funct_trans.fit_transform(cross_tab)
+
+    # Use hungarian algo to find ind and row order that minimizes inverse
+    # of the diag vals -> max diag vals
+    row_ind, col_ind = linear_sum_assignment(inv_df.values)
+    inv_df = inv_df.loc[inv_df.index[row_ind],
+                        inv_df.columns[col_ind]]
+
+    # Take once again inverse to go back to original values
+    cross_tab = funct_trans.inverse_transform(inv_df)
+    result = cross_tab.copy(deep='True')
+
+    if normalize == False:
+        result = result.round(0).astype(int)
+
+    if margins_sums:
+        # assign the sums margins to the result dataframe
+        marg_sum_vert = result[result.columns].sum(1)
+        result = result.assign(cat_sum=marg_sum_vert)
+        marg_sum_hor = result.loc[result.index].sum(0)
+        result = result.append(pd.Series(marg_sum_hor,
+                                         index=result.columns,
+                                         name='clust_sum'))
+
+    if margins_score:
+        # Compute a correpondance score between clusters and categories
+        li_cat_clust = list(zip(cross_tab.index,
+                                cross_tab.columns))
+        li_cat_corresp_score, li_clust_corresp_score = [], []
+        for i, tup in enumerate(li_cat_clust):
+            match = result.loc[tup]
+            cat_corr_score = 100*match/cross_tab.sum(1).iloc[i]
+            clust_corr_score = 100*match/cross_tab.sum(0).iloc[i]
+            li_cat_corresp_score.append(cat_corr_score)
+            li_clust_corresp_score.append(clust_corr_score)
+
+        # assign the margins to the result dataframe
+        if margins_sums:
+            li_cat_corresp_score.append('-')
+            li_clust_corresp_score.append('-')
+
+        marg_vert = pd.Series(li_cat_corresp_score,
+                              index=result.index,
+                              name='cat_matching_score_pct')
+        result = result.assign(cat_matching_score_pct=marg_vert) 
+
+        marg_hor = pd.Series(li_clust_corresp_score + ['-'],
+                             index=result.columns,
+                             name='clust_matching_score_pct')
+        result = result.append(marg_hor)
+
+    result = result.fillna('-')
+
+    return result
+
+    '''
+Computing the trustworthiness category by category
+'''
+from sklearn.manifold import trustworthiness
+
+def groups_trustworthiness(df, df_proj, ser_clust):
+    
+    gb_clust = df.groupby(ser_clust)
+    tw_clust, li_clust = [], []
+    for n_clust, ind_sub_df in gb_clust.groups.items():
+        li_clust.append(n_clust)
+        tw_clust.append(trustworthiness(df.loc[ind_sub_df],
+                                        df_proj.loc[ind_sub_df],
+                                        n_neighbors=5, metric='euclidean'))
+    ser = pd.Series(tw_clust,
+                    index=li_clust,
+                    name='tw')
+    return ser
+
+''' Plots the points on two axis (projection choice available : PCA, UMAP, t-SNE)
+with clusters coloring if model available (grey if no model given).
+NB: if the model wa already fitted, does not refit.'''
+
+import seaborn as sns
+from sklearn.manifold import trustworthiness
+from sklearn.preprocessing import LabelEncoder
+
+def plot_projection_cat_clust(df, model=None, ser_clust = None, true_cat=None,
+                              proj='PCA', title=None, figsize=(5, 3),
+                              size=1, edgelinesize=25, centersize=150,
+                              palette='tab10', legend_on=False,
+                              bboxtoanchor=None, fig=None, ax=None,
+                              random_state=14):
+
+    fig = plt.figure(figsize=figsize) if fig is None else fig
+    ax = fig.add_subplot(111) if ax is None else ax
+
+    # a1 - if model : computes clusters, clusters centers and plot with colors
+    if model is not None:
+
+        # Computes the axes for projection with centers
+        # (uses fitted model if already fitted)
+        dict_proj, dict_proj_centers, model = prepare_2D_axes(df,
+                                                              proj=[proj],
+                                                              model=model,
+                                                              centers_on=True,
+                                                              random_state=random_state)
+
+        # ...or using model already fitted in prepare_2D_axes to get it
+        #### all clusterers don't have .predict/labels_ method -> changed
+        if hasattr(model, 'labels_'):
+            clust = model.labels_
+        else:
+            clust = model.predict(df)
+        ser_clust = pd.Series(clust,
+                              index=df.index,
+                              name='Clust')
+        
+    # a2 - if no model but ser_clust is given, plot with colors
+    elif ser_clust is not None:
+        
+        # Computes the axes for projection
+        dict_proj, dict_proj_centers, _ = \
+            prepare_2D_axes(df, ser_clust=ser_clust, proj=[proj],
+                            model=None, centers_on=True,
+                            random_state=random_state)
+            
+    # Computing the global trustworthiness
+    trustw = trustworthiness(df, dict_proj[proj],
+                             n_neighbors=5, metric='euclidean')
+    # Computing the trustworthiness category by category
+    ser_tw_cat = groups_trustworthiness(df, dict_proj[proj], true_cat)
+    ser_tw_clust = groups_trustworthiness(df, dict_proj[proj], ser_clust)
+
+    # b1 - if ser_clust exists (either calculated from model or given)
+    if ser_clust is not None:
+        # Prepare the correpondance between categories and clusters
+        cm = confusion_matrix_clust(df_res_clust['categories'],
+                                    df_res_clust['NMF_tfidf'])
+        cat_list = cm.index # liste des catégories, dans l'ordre
+        clust_list = cm.columns # liste des clusters, dans l'ordre
+
+        # prepare color values
+        n_clust = ser_clust.nunique()
+        c1 = sns.color_palette(palette, cm.shape[0]).as_hex() # cat
+        c2 = sns.color_palette(palette, cm.shape[1]).as_hex() # clust
+        colors1 = true_cat.map(dict(zip(cat_list, c1))) # traduit une catégorie en couleur de c1
+        colors2 = ser_clust.map(dict(zip(clust_list, c2))) # traduit un cluster en couleur de c2
+
+        # # prepare markers values
+        # lenc = LabelEncoder()
+        # markers = pd.Series([f'${i}$' for i in lenc.fit_transform(true_cat)],
+        #                     index=true_cat.index)
+        # Plot the data points
+        for i in range(len(ser_clust.index)):
+            ax.scatter(dict_proj[proj].iloc[i, 0],
+                        dict_proj[proj].iloc[i, 1],
+                        color=colors1.iloc[i],
+                        s=size, linewidths=edgelinesize,
+                        alpha=1, #marker=markers[i],
+                        ec=colors2.iloc[i])
+
+        # calculation of centers
+        cent_clust_df = dict_proj[proj].assign(clust=ser_clust)\
+                        .groupby(ser_clust).mean()         
+        cent_cat_df = dict_proj[proj].assign(cat=true_cat)\
+                        .groupby(true_cat).mean()
+        
+        # categories centers
+        for i, name_cat, col in zip(range(len(cat_list)), cat_list, c1):
+            # Showing the categories centers
+            ax.scatter(cent_cat_df.iloc[:, 0].loc[name_cat],
+                       cent_cat_df.iloc[:, 1].loc[name_cat],
+                       marker='o', c=col, alpha=0.7, s=size,
+                       edgecolor='lightgrey', linewidths=edgelinesize,
+                       label="{}: {} | tw={:0.2f}".format(i, name_cat,
+                                                          ser_tw_cat[name_cat]),
+                       zorder=10) # for the labels only
+            ax.scatter(cent_cat_df.iloc[:, 0].loc[name_cat],
+                       cent_cat_df.iloc[:, 1].loc[name_cat],
+                       marker='o', c=col, alpha=0.7, s=centersize,
+                       edgecolor='k', zorder=10) # to plot the circle
+            # Showing the categories centers labels (number)
+            ax.scatter(cent_cat_df.iloc[:, 0].loc[name_cat],
+                       cent_cat_df.iloc[:, 1].loc[name_cat],
+                       marker=r"$ {} $".format(i+1),
+                       c='k', alpha=1, s=70, zorder=100)
+        
+        # clusters centers
+        for i, name_clust, col in zip(range(len(clust_list)), clust_list, c2):
+            # Showing the clusters centers
+            ax.scatter(cent_clust_df.iloc[:, 0].loc[name_clust],
+                       cent_clust_df.iloc[:, 1].loc[name_clust],
+                       marker='o', c='lightgrey', alpha=0.7, s=size,
+                       edgecolor=col, linewidths=edgelinesize,
+                       label="{}: {} | tw={:0.2f}".format(i, name_clust,
+                                                          ser_tw_clust[name_clust]),
+                       zorder=10) # for the labels only
+            ax.scatter(cent_clust_df.iloc[:, 0].loc[name_clust],
+                       cent_clust_df.iloc[:, 1].loc[name_clust],
+                       marker='o', c=col, alpha=0.7, s=centersize,
+                       edgecolor='k', zorder=20) # to plot the circle
+            # Showing the categories centers labels (number)
+            ax.scatter(cent_clust_df.iloc[:, 0].loc[name_clust],
+                       cent_clust_df.iloc[:, 1].loc[name_clust],
+                       marker=r"$ {} $".format(i+1),
+                       c='dimgrey', alpha=1, s=70, zorder=100)
+
+        # link between the centers
+        for n_cat, n_clust in zip(cat_list, clust_list):
+            x1 = cent_cat_df.iloc[:,0].loc[n_cat]
+            x2 = cent_clust_df.iloc[:,0].loc[n_clust]
+            y1 = cent_cat_df.iloc[:,1].loc[n_cat]
+            y2 = cent_clust_df.iloc[:,1].loc[n_clust]
+            plt.plot([x1, x2], [y1, y2],
+                     color='k', linewidth=1)
+
+        if legend_on:
+            plt.legend().get_frame().set_alpha(0.3)
+            if bboxtoanchor is not None:
+                plt.legend(bbox_to_anchor=bboxtoanchor)
+            else: 
+                plt.legend()
+
+    # b2 - if no ser_clust: only plot points in grey
+    else:
+        # Computes the axes for projection without centers
+        dict_proj = prepare_2D_axes(df,
+                                    proj=[proj],
+                                    centers_on=False,
+                                    random_state=random_state)
+        # Plotting the point in grey
+        ax.scatter(dict_proj[proj].iloc[:, 0],
+                   dict_proj[proj].iloc[:, 1],
+                   s=size, alpha=0.7, c='dimgrey')
+
+    title = "Projection: " + proj + "(trustworthiness: {:.2f})".format(trustw)\
+             if title is None else title
+    ax.set_title(title + "\n(trustworthiness: {:.2f})".format(trustw),
+                 fontsize=12, fontweight='bold')
+    ax.set_xlabel('ax 1'), ax.set_ylabel('ax 2')
