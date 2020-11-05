@@ -71,6 +71,43 @@ def plot_wordclouds_topwords(H, n_top_words, n_rows=1, figsize=(18,8),
         
     plt.show()
 
+'''
+t-SNE wrapper in order to use t-SNE as a dimension reducter as a pipeline step of a 
+GridSearch (indeed, tsne doesn't have a transform method but only a fit_transform 
+method -> it cannot be applied to another set of data than the one on which it was trained)
+'''
+
+from sklearn.manifold import TSNE
+
+class TSNE_wrapper(TSNE):
+
+    def __init__(self, angle=0.5, early_exaggeration=12.0, init='random',
+                 learning_rate=200.0, method='barnes_hut', metric='euclidean',
+                 min_grad_norm=1e-07, n_components=2, n_iter=1000,
+                 n_iter_without_progress=300, n_jobs=None,
+                 perplexity=30.0, random_state=None, verbose=0):
+
+        self.angle = angle
+        self.early_exaggeration = early_exaggeration
+        self.init = init
+        self.learning_rate = learning_rate
+        self.method = method
+        self.metric = metric
+        self.min_grad_norm = min_grad_norm
+        self.n_components = n_components
+        self.n_iter = n_iter
+        self.n_iter_without_progress = n_iter_without_progress
+        self.n_jobs = n_jobs
+        self.perplexity = perplexity
+        self.random_state = random_state
+        self.verbose = verbose
+
+    def transform(self, X):
+        return TSNE().fit_transform(X)
+
+    def fit(self,X):
+        return TSNE().fit(X)
+
 '''Computes the projection of the observations of df on the two first axes of
 a transformation (PCA, UMAP or t-SNE)
 The center option (clustering model needed) allows to project the centers
@@ -645,7 +682,7 @@ def combinlist(seq, k):
                 s.append(seq[j])
             j += 1
         if len(s)==k:
-            p.append(s)
+            p.append(tuple(s))
         i += 1
     return p
 
@@ -973,6 +1010,7 @@ def groups_trustworthiness(df, df_proj, ser_clust):
 with clusters coloring if model available (grey if no model given).
 NB: if the model wa already fitted, does not refit.'''
 
+
 import seaborn as sns
 from sklearn.manifold import trustworthiness
 from sklearn.preprocessing import LabelEncoder
@@ -1027,8 +1065,7 @@ def plot_projection_cat_clust(df, model=None, ser_clust = None, true_cat=None,
     # b1 - if ser_clust exists (either calculated from model or given)
     if ser_clust is not None:
         # Prepare the correpondance between categories and clusters
-        cm = confusion_matrix_clust(df_res_clust['categories'],
-                                    df_res_clust['NMF_tfidf'])
+        cm = confusion_matrix_clust(true_cat,ser_clust)
         cat_list = cm.index # liste des catégories, dans l'ordre
         clust_list = cm.columns # liste des clusters, dans l'ordre
 
@@ -1131,3 +1168,918 @@ def plot_projection_cat_clust(df, model=None, ser_clust = None, true_cat=None,
     ax.set_title(title + "\n(trustworthiness: {:.2f})".format(trustw),
                  fontsize=12, fontweight='bold')
     ax.set_xlabel('ax 1'), ax.set_ylabel('ax 2')
+
+
+'''
+Takes a confusion matrix (best if diagonal maximized) with true categories as
+indices and clusters as columns (can be obtained using the function
+'confusion_matrix_clust', which ensures the diagonal values are maximum i.e.
+the best bijective correponding cat-clut pairs have been found),
+then plot the sankey confusion matrix.
+Use the option static to plot a static image of the original interactive graph.
+
+NB: the code below needs to be run if you are on colab
+
+    # in order to get orca to be installed in colab (to display static plotly graphs)
+    !pip install plotly>=4.0.0
+    !wget https://github.com/plotly/orca/releases/download/v1.2.1/orca-1.2.1-x86_64.AppImage -O /usr/local/bin/orca
+    !chmod +x /usr/local/bin/orca
+    !apt-get install xvfb libgtk2.0-0 libgconf-2-4
+'''
+
+import plotly.graph_objects as go
+from IPython.display import Image
+
+def plot_sankey_confusion_mat(cm, static=False, figsize=(2, 1.7),
+                              font_size=14, scale=1, palette = 'tab10'):
+
+    n_cat = cm.shape[0]
+    n_clust = cm.shape[1]
+    source = np.array([n_clust*[i] for i in range(n_cat)]).ravel()
+    target = np.array([[i] for i in range(n_cat,n_clust+n_cat)]*n_cat).ravel()
+    value = cm.values.ravel()
+    nodes_lab = list(cm.index)+list(cm.columns)
+    alpha_nodes, alpha_links = 0.7, 0.3
+    my_pal = sns.color_palette(palette, max(cm.shape))
+    pal_nodes_cat = list([f'rgba({r},{g},{b},{alpha_nodes})' \
+                        for r, g, b in my_pal[:n_cat]])
+    pal_nodes_clust = list([f'rgba({r},{g},{b},{alpha_nodes})' \
+                            for r, g, b in my_pal[:n_clust]])
+    nodes_colors = (pal_nodes_cat + pal_nodes_clust)#.as_hex()
+
+    pal_links = list([f'rgba({r},{g},{b},{alpha_links})' for r, g, b in my_pal[:n_cat]])
+    dict_links_colors = dict(zip(range(n_cat), pal_links))
+    links_colors = np.vectorize(dict_links_colors.__getitem__)(source)#.as_hex()
+
+    # Prepare the graph
+    fig = go.Figure(data=[go.Sankey(node = dict(pad = 15,
+                                                thickness = 20,
+                                                line = dict(color = "black",
+                                                            width = 0.5),
+                                                label = nodes_lab,
+                                                color = nodes_colors),
+                                    link = dict(source = source,
+                                                target = target,
+                                                value = value,
+                                                # label = ,
+                                                color = links_colors,
+                                                ))])
+    # title
+    fig.update_layout(title_text="Sankey confusion diagram | \
+true categories vs. clusters", font_size=font_size)
+    if static:
+        w, h = figsize
+        img_bytes = fig.to_image(format="png", width=w, height=h, scale=scale)
+        # Image(img_bytes)
+        return img_bytes
+    else:
+        fig.show()
+
+''' from a sentence, containing words (document):
+- tokenizes the words if only composed of alphanumerical data,
+- removes stopwords if list is given (stopwords)
+- stems the words if stemmer given
+NB: This pre-processing function can be used to prepare data for Word2Vec
+'''
+from nltk.stem.snowball import EnglishStemmer
+import spacy
+import nltk
+nltk.download('averaged_perceptron_tagger')
+
+def tokenize_clean(document, stopwords=None, keep_tags=None, # ('NN' or 'JJ')
+                   lemmatizer=None, stemmer=None):
+    # 1 - tokenizing the words in each description
+    tokenizer = nltk.RegexpTokenizer(r'[A-Za-z]+')
+    li_words = tokenizer.tokenize(document)
+    # 2 - lower case
+    li_words = [s.lower() for s in li_words]
+    # 3 - keep only certain tags
+    if keep_tags is not None:
+        li_words = [word for word,tag in nltk.pos_tag(li_words)\
+            if tag in keep_tags]
+    if stopwords is None: stopwords=[]
+    # 4 - lemmatizing or stemming
+    if lemmatizer is not None:
+        lem_doc = lemmatizer(' '.join(li_words))
+        li_words = [token.lemma_ for token in lem_doc]
+    elif stemmer is not None:
+        li_words = [stemmer.stem(s) for s in li_words]
+    # 5 - removing stopwords
+    li_words = [s for s in li_words if s not in stopwords]
+
+    return li_words
+
+    ''' Takes a pd.Series containing the texts of each description
+applies a preprocessing function if given (stopwords, stemming...)
+then turn the descriptions in vectors (bow of tf-idf, depending on the avlue of
+ tfidf_on)
+ returns document term matrix as a dataframe and the list of new excluded words.
+'''
+
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer
+
+def compute_doc_terms_df(ser_desc, 
+                         preproc_func=None,
+                         preproc_func_params=None,
+                         vec_params=None,
+                         tfidf_on=False,
+                         print_opt=False):
+
+    # ---- Apply a stemming of lemmatization prior to vectorization
+    if preproc_func is not None:
+        ser_desc = ser_desc.apply(lambda x: preproc_func(x,
+                                                         **preproc_func_params))
+        ser_desc = ser_desc.apply(lambda x: ' '.join(x))
+    else:
+        ser_desc = ser_desc
+    
+    # ---- Vectorization of each of the texts (row)
+    if tfidf_on:
+        # TF-IDF matrix
+        vec = TfidfVectorizer(**vec_params)
+    else:
+        # BOW matrix (count)
+        vec = CountVectorizer(**vec_params)
+
+    doc_term = vec.fit_transform(ser_desc)
+    if print_opt:
+        print( "Created %d X %d doc_term matrix" % (doc_term.shape[0],
+                                                    doc_term.shape[1]))
+
+    # ---- Vocabulary of the document_term matrix
+    doc_term_voc = vec.get_feature_names()
+    if print_opt:
+        print("Vocabulary has %d distinct terms" % len(doc_term_voc))
+
+    # ---- Get the list of the new stop-words
+    new_sw = vec.stop_words_
+    if print_opt:
+        print("Old stop-words list has %d entries" % len(sw) )
+        print("New stop-words list has %d entries" % len(new_sw))
+
+    doc_term_df = pd.DataFrame(doc_term.todense(),
+                index=ser_desc.index, # each item
+                columns=doc_term_voc) # each word
+
+    # document term matrix as a dataframe and the list of new excluded words
+    return doc_term_df, new_sw
+
+
+'''
+Takes a vectorized matrix (dataframe) of the documents
+(Document-trem matrix: BOW or tf-idf... documents(rows) x words (columns))
+and returns the projected vectors in the form of a dataframe
+(words (rows) x w2v dimensions(columns))
+'''
+
+def proj_term_doc_on_w2v(term_doc_df, w2v_model, print_opt=False):
+
+    # Checking the number of words of our corpus existing in the wiki2vec dictionary
+    li_common_words = []
+    for word in term_doc_df.columns:
+        word_ = w2v_model.get_word(word)
+        if word_ is not None:
+            li_common_words.append(word)
+    if print_opt:
+        print(f"The w2v dictionary contains {len(li_common_words)} words out of \
+the {term_doc_df.shape[1]} existing in our descriptions,\ni.e. \
+{round(100*len(li_common_words)/term_doc_df.shape[1],1)}% of the whole vocabulary.")
+
+    # extracting each of the word vectors
+    word_vectors_df = pd.DataFrame()
+    for word in li_common_words:
+        word_vectors_df[word] = w2v_model.get_word_vector(word)
+    word_vectors_df = word_vectors_df.T
+    word_vectors_df.columns = ['dim_'+str(i)\
+                               for i in range(word_vectors_df.shape[1])]
+
+    # projection of the Document_terms matrix on the wiki2vec
+    w2v_emb_df = term_doc_df[li_common_words].dot(word_vectors_df)
+
+    return w2v_emb_df
+
+
+''' Builds a customizable NLP column_transformer which parameters
+can be optimized in a GridSearchClust
+'''
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.compose import ColumnTransformer
+# from sklearn.exceptions import NotFittedError
+from sklearn.utils.validation import check_is_fitted
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import *
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer
+from nltk.stem.snowball import EnglishStemmer
+import spacy
+import nltk
+nltk.download('averaged_perceptron_tagger')
+
+import numpy as np
+import pandas as pd
+from wikipedia2vec import Wikipedia2Vec
+
+
+class CustNLPTransformer(BaseEstimator, TransformerMixin):
+
+    def __init__(self, stopwords=None, keep_tags=None, stemmer=None,
+                 lemmatizer=None, min_df=0, max_df=1.0, max_features=None,
+                 tfidf_on=False, ngram_range=(1,1), binary=False,
+                 w2v=None, pname_weight=0.5):
+        
+        self.stopwords = stopwords
+        self.keep_tags = keep_tags
+        self.lemmatizer = lemmatizer
+        self.stemmer = stemmer
+        self.min_df = min_df
+        self.max_df = max_df
+        self.max_features = max_features
+        self.tfidf_on = tfidf_on
+        self.ngram_range = ngram_range
+        self.binary = binary
+        self.w2v = w2v
+        self.pname_weight = pname_weight
+        self.preproc_func_params={'stopwords': self.stopwords,
+                                  'keep_tags': self.keep_tags,
+                                  'lemmatizer': self.lemmatizer,
+                                  'stemmer': self.stemmer}
+        self.vec_params = {'min_df': self.min_df,
+                           'max_df': self.max_df,
+                           'max_features': self.max_features,
+                           'ngram_range': self.ngram_range,
+                           'binary': self.binary}
+
+
+        # all preprocessing params to None (faster)
+        if set([v for k, v in self.preproc_func_params.items()]) == set([None]):
+            self.preproc_func = None
+        else: # else tokenize_clean private function will be called
+            self.preproc_func = self.__tokenize_clean
+
+    # "private" method to prepropcess data inside '__compute_doc_terms_df'
+
+    def __tokenize_clean(self, document, stopwords=None, keep_tags=None, # ('NN','JJ')
+                    lemmatizer=None, stemmer=None):
+        
+        # 1 - tokenizing the words in each description
+        tokenizer = nltk.RegexpTokenizer(r'[A-Za-z]+')
+        li_words = tokenizer.tokenize(document)
+        # 2 - lower case
+        li_words = [s.lower() for s in li_words]
+        # 3 - keep only certain tags
+        if keep_tags is not None:
+            li_words = [word for word,tag in nltk.pos_tag(li_words)\
+                if tag in keep_tags]
+        if stopwords is None: stopwords=[]
+        # 4 - lemmatizing or stemming
+        if lemmatizer is not None:
+            lem_doc = lemmatizer(' '.join(li_words))
+            li_words = [token.lemma_ for token in lem_doc]
+        elif stemmer is not None:
+            li_words = [stemmer.stem(s) for s in li_words]
+        # 5 - removing stopwords
+        li_words = [s for s in li_words if s not in stopwords]
+
+        return li_words
+
+
+    # "private" method to be used to apply transformation and get a df
+    def __compute_doc_terms_df(self, ser_desc, preproc_func=None,
+                               preproc_func_params=None, vec_params=None,
+                               tfidf_on=None, vec=None):
+        # ---- Apply a stemming or lemmatization prior to vectorization
+        if preproc_func is not None:
+            ser_desc = ser_desc.apply(lambda x: \
+                                      preproc_func(x, **preproc_func_params))
+            ser_desc = ser_desc.apply(lambda x: ' '.join(x))
+        else:
+            ser_desc = ser_desc
+        # ---- Vectorization of each of the texts (row)
+        if vec is None: # if no trained vectorized given
+            if tfidf_on:
+                # TF-IDF matrix
+                vec = TfidfVectorizer(**vec_params)
+            else:
+                # BOW matrix (count)
+                vec = CountVectorizer(**vec_params)
+            vec.fit(ser_desc)
+        else: # if a vectorizer is given
+            try: # test if it is already fitted
+                check_is_fitted(vec, attributes=None, all_or_any='any')
+            except NotFittedError as e:
+                vec.fit(ser_desc)
+                print("Warning: 'vec' was not fitted -> has been fitted with 'df_desc'")
+        doc_term = vec.transform(ser_desc)
+        # ---- Vocabulary of the document_term matrix
+        doc_term_voc = vec.get_feature_names()
+        # # ---- Get the list of the new stop-words
+        # new_sw = vec.stop_words_
+        doc_term_df = pd.DataFrame(doc_term.todense(),
+                                   index=ser_desc.index, # each item
+                                   columns=doc_term_voc) # each word
+        # document term matrix as a dataframe and the fitted vectorizer
+        return doc_term_df, vec
+
+    def fit(self, X, y=None):
+        # nothing to fit - only set dictionaries (if a set_params had been run...)
+        self.preproc_func_params={'stopwords': self.stopwords,
+                                  'keep_tags': self.keep_tags,
+                                  'lemmatizer': self.lemmatizer,
+                                  'stemmer': self.stemmer}
+        self.vec_params = {'min_df': self.min_df,
+                           'max_df': self.max_df,
+                           'max_features': self.max_features,
+                           'ngram_range': self.ngram_range,
+                           'binary': self.binary}
+        return self
+
+    def transform(self, X, y=None):  # returns a dataframe
+
+        # X must be splitted in two parts : X_desc and X_pname
+        X_desc, X_pname = X.iloc[:, 0], X.iloc[:, 1]
+
+        # tranformation of X_pname into a custom BOW
+        df_pname_trans, vec_fitted = self.__compute_doc_terms_df(\
+                     ser_desc=X_pname,
+                     preproc_func=self.preproc_func, 
+                     preproc_func_params=self.preproc_func_params,
+                     vec_params=self.vec_params,
+                     tfidf_on=self.tfidf_on,
+                     vec=None) # vec not fitted yet
+
+        # tranformation of X_desc into a custom BOW (vec fitted with desc)
+        df_desc_trans, _ = self.__compute_doc_terms_df(\
+                     ser_desc=X_desc,
+                     preproc_func=self.preproc_func,
+                     preproc_func_params=self.preproc_func_params,
+                     vec=vec_fitted) # vec fitted on the descriptions
+        
+        # Mix the X_desc and X_pname BOWs into one BOW (weight)
+
+        df_trans = (df_desc_trans.mul(1-self.pname_weight,
+                                      fill_value=0))\
+                    .add(df_pname_trans.mul(self.pname_weight,
+                                            fill_value=0),
+                        fill_value=0)
+        # if word_embedding is enabled, projection of the BOW on a given w2v
+        if self.w2v is not None:
+            df_trans = proj_term_doc_on_w2v(df_trans, self.w2v,
+                                            print_opt=False)
+        return df_trans
+
+    def fit_transform(self, X, y=None):
+        self.fit(X, y)
+        return self.transform(X, y)
+
+''' Builds a topics modeler which parameters (model, number of topics)
+can be optimized in a GridSearchClust.
+.transform: returns the DOCUMENTS/TOPICS matrix
+.predict: returns the list of the most probable topic for each document
+NB: takes a dataframe as X.
+'''
+from sklearn.base import BaseEstimator
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import *
+from sklearn.decomposition import NMF
+from sklearn.decomposition import LatentDirichletAllocation as LDA
+from sklearn.decomposition import TruncatedSVD
+import numpy as np
+import pandas as pd
+
+class TopicsModeler(BaseEstimator):
+
+    def __init__(self, n_model='nmf', n_components=7, random_state=None):#, model_params):
+
+        self.n_model = n_model
+        self.n_components = n_components
+        self.random_state = random_state
+        # self.model_params = model_param
+
+        # Model name -> object
+        self.dict_models = {'lsa': TruncatedSVD(),
+                            'nmf': NMF(init="nndsvd"),
+                            'lda': LDA()}
+
+        # Instantiate the model
+        try:
+            self.model = self.dict_models[self.n_model]#.set_params(*self.model_params)
+        except:
+            print(f"ERROR: {self.n_model} is an unknown topics modeliser. \n\
+Please, choose between 'nmf', 'lda' and 'lsa'")
+
+    def fit(self, X, y=None):
+
+        # Re-Instantiate the model
+        try:
+            self.model = self.dict_models[self.n_model]#.set_params(*self.model_params)
+        except:
+            print(f"ERROR: {self.n_model} unknown topics modeliser. \n\
+Please, choose between 'nmf', 'lda' and 'lsa'")
+
+        # Set the parameters
+        self.model.set_params(n_components = self.n_components,
+                              random_state = self.random_state)
+
+        # Fit the model
+        self.model.fit(X)
+
+        return self
+
+    def __compute_DOC_TOP_matrix(self, X, y=None): # DOCUMENTS/TOPICS Matrix
+    # actualization of n_components
+        self.n_components = self.model.transform(X.values).shape[1]
+        self.W = pd.DataFrame(self.model.transform(X.values),
+                              index=X.index, # documents
+                              columns=['topic_'+str(i)\
+                                       for i in range(1,self.n_components+1)]) # topics
+
+    def __compute_TOP_WORDS_matrix(self, X, y=None): # TOPICS/WORDS Matrix
+
+        self.H = pd.DataFrame(self.model.components_, 
+                              index=['topic_'+str(i)\
+                                     for i in range(1,self.n_components+1)], # topics
+                              columns=X.columns) # words
+
+    def transform(self, X, y=None):  # to get the df of the DOC/TOPICS matrix
+
+        self.__compute_DOC_TOP_matrix(X)
+        self.__compute_TOP_WORDS_matrix(X)
+
+        # Converting topics scores to best cluster label (higher val column)
+        ser_res = self.W.idxmax(1)
+
+        return self.W
+
+    def predict(self, X, y=None):  # to get a ser of the best label
+
+        self.__compute_DOC_TOP_matrix(X)
+        self.__compute_TOP_WORDS_matrix(X)
+
+        # Converting topics scores to best cluster label (higher val column)
+        ser_res = self.W.idxmax(1)
+
+        return ser_res
+
+    def fit_transform(self, X, y=None):
+        self.fit(X, y)
+        return self.transform(X, y)
+
+    def fit_predict(self, X, y=None):
+        self.fit(X, y)
+        return self.predict(X, y)
+
+
+'''
+Class to optimize clustering score.
+Instantiate with a clusterer (estimator), a grid parameter (param_grid)
+and a scoring function or a dict of scores (scoring) to be translated
+in actual scores (see the compute_score)
+'''
+
+import numpy as np
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.model_selection import ParameterGrid
+from collections import defaultdict
+from sklearn.metrics import silhouette_score, calinski_harabasz_score,\
+ davies_bouldin_score, adjusted_mutual_info_score, adjusted_rand_score,\
+ homogeneity_score, completeness_score, v_measure_score
+
+
+class GridSearchClust(BaseEstimator, TransformerMixin):
+
+    def __init__(self, estimator, param_grid_estim, param_grid_preproc=None,
+                 scoring=None, scoring_true_lab=None, refit='silh',
+                 greater_is_better=True):
+
+        # Get the parameters
+        self.estimator = estimator
+        self.param_grid_estim = param_grid_estim
+        self.param_grid_preproc = param_grid_preproc
+        self.scoring = scoring
+        self.scoring_true_lab = scoring_true_lab
+        self.refit = refit
+        self.greater_is_better = greater_is_better
+
+    def __compute_score(self, X, clust_lab, n_score):
+
+        dict_scores = {
+            # Scores related to the clusters labels found by our estimator
+               'silh': silhouette_score(X, clust_lab),
+               'cal-har': calinski_harabasz_score(X, clust_lab),
+               'dav_bould': davies_bouldin_score(X, clust_lab),
+            # Scores comparing true labels and clusters found by our estimator
+               'ami': adjusted_mutual_info_score(self.scoring_true_lab, clust_lab),
+               'ari': adjusted_rand_score(self.scoring_true_lab, clust_lab),
+               'homog': homogeneity_score(self.scoring_true_lab, clust_lab),
+               'complet': completeness_score(self.scoring_true_lab, clust_lab),
+               'v_meas': v_measure_score(self.scoring_true_lab, clust_lab),
+               }
+        return dict_scores[n_score]
+
+
+    def fit(self, X, verbose=False):
+
+        # Initialize the dict of results
+        self.results_ = {"scores": {},
+                         "params": [],
+                         "estimators": [],
+                        #  "fit_times": [],
+                         "refit_score": []}
+
+        # Iterate upon all combinations of parameters
+        estim_score = defaultdict(list)
+        nb_params = len(list(ParameterGrid(self.param_grid_estim)))
+
+        for i, param in enumerate(ParameterGrid(self.param_grid_estim),1):
+
+            if verbose: print(f"{i}/{nb_params}:")
+
+            # Change the parameters of the estimator
+            self.estimator = self.estimator.set_params(**param)
+
+            # If the estimator is a pipe,
+            if hasattr(self.estimator, 'steps'): # if estimator is a pipeline
+                pipe_wo_last_estim = Pipeline(self.estimator.steps[0:-1])
+                last_estim = self.estimator[-1] # .steps[-1][1]
+                # compute the first steps separately
+                X_trans = pipe_wo_last_estim.fit_transform(X)
+                # fit the last estimator
+                last_estim.fit(X_trans)
+                # compute the labels
+                labels = last_estim.predict(X_trans)
+            else:
+                X_trans = X
+                # fit the model
+                self.estimator.fit(X_trans)
+                # compute the labels
+                labels = self.estimator.predict(X_trans)
+
+            # Compute the refit score
+            try:
+                refit_score = self.__compute_score(X_trans, labels,
+                                                   self.refit)
+            except:
+                print('ERREUR calcul refit_score: is scoring_true_lab correctly set ?')
+                refit_score = np.nan
+            # Other scores (scoring)
+            if not self.scoring:  # if scoring parameter is/are not defined
+                estim_score['score'] = \
+                    {'ari(default)': self.__compute_score(X_trans, labels,
+                                                          'ari')}
+            else:  # If scoring parameter is/are defined
+                if type(self.scoring) not in (tuple, list):
+                    self.scoring = [self.scoring]
+                else:
+                    # looping over each score in the scoring list
+                    for n_sco in self.scoring:
+                        try:
+                            estim_score[n_sco] = estim_score[n_sco] + \
+                                [self.__compute_score(X_trans, labels, n_sco)]
+                        except:
+                            estim_score[n_sco] = estim_score[n_sco] + [np.nan]
+                            print("ERROR: score computation hasn't worked")
+
+            # # Measure training time while fitting the model on the data
+            # time_train = %timeit -n1 -r1 -o -q self.estimator.fit(X)
+            # time_train = time_train.average
+
+            # saving results, parameters and models in a dict
+            self.results_["refit_score"].append(refit_score)  # refit score
+            self.results_["params"].append(param)  # parameters
+            self.results_["estimators"].append(self.estimator)  # trained models
+            # self.results_["fit_times"].append(time_train)  # training time
+
+        self.results_["scores"] = dict(estim_score)  # dict of lists of scores
+        self.results_["refit_score"] = np.array(self.results_["refit_score"])
+  
+        # Selecting best model based on the refit_score
+        # -----------------------------------
+        # initialisation
+        best_estim_index, best_score = None, None  
+        # iterating over scores
+        for index, score in enumerate(self.results_["refit_score"]):
+
+            # initialisation
+            if not best_score:
+                best_score = score
+                best_estim_index = index
+
+            # if score is better than current best_score
+            cond = score > best_score if self.greater_is_better\
+                                                 else score < best_score
+            if cond:
+                    # update the current best_score and current best_estim_index
+                    best_score = score
+                    best_estim_index = index
+        
+        # Update attributes of the instance
+        self.best_score_ = self.results_["refit_score"][best_estim_index]
+        self.best_params_ = self.results_["params"][best_estim_index]
+        self.best_estimator_ = self.results_["estimators"][best_estim_index]
+        self.best_index_ = best_estim_index
+        # self.refit_time_ = self.results_["fit_times"][best_estim_index]
+
+        # refit the best model
+        self.best_estimator_.fit(X)
+        
+        return self
+
+    def transform(self, X, y=None):
+
+        # If the estimator is a pipe,
+        if hasattr(self.best_estimator_, 'steps'): # if estimator is a pipeline
+            best_pipe_wo_last_estim = Pipeline(self.best_estimator_.steps[0:-1])
+            # compute the first steps separately
+            X_trans = best_pipe_wo_last_estim.fit_transform(X)
+            # fit the last estimator
+        else:
+            print("No multistep pipeline: returned only the original dataframe...")
+            X_trans = X
+       
+        return X_trans
+
+    def predict(self, X, y=None):
+
+        # use the .predict method of the best estimator on the best model
+        return self.best_estimator_.predict(X)
+
+''' Takes a GridSearchClust object and the name of one parameter of the
+estimator (or of the pipeline) and isolate the influence of this parameter
+on all the scores available in the scv (scoring)
+-> returns a dictionary of the best other fixed parameters
+and a dataframe of the scores depending on the chosen parameter and a 
+filtered results_ dataframe that can be used
+in the 'plot_scv_multi_scores' function '''
+
+def filters_gsclust_results(gsc, param, return_df_res=False):
+
+    gsc_res = gsc.results_
+    # Generate a dataframe of all the models tested, their scores and parameters
+    df_gsc = pd.DataFrame()
+    for k, v in gsc_res.items():
+        if type(v) == dict: # dict de listes : scores
+            df_ = pd.DataFrame(v)
+        elif type(v) == list:
+            if type(v[0]) == dict: # liste de dicts : params
+                df_ = pd.DataFrame(v)
+                li_params = df_.columns
+            else: # liste d'objets (estimators) ou de nombres (refit_score)
+                df_ = pd.DataFrame(v, columns=[k])
+        else:
+            col_names = [str(k)]
+            df_ = pd.DataFrame(v, columns=[k])
+        df_gsc = pd.concat([df_gsc, df_], axis=1)
+    df_gsc_transl = object_none_translater(df_gsc)
+
+    # selects in the data frame the best params
+    best_params = gsc.best_params_.copy() # dict of the best params
+    # translation of all the non numeric values into strings (including None)
+    best_params_transl = object_none_translater(best_params) 
+    del best_params_transl[param] # remove the parameter that we want to plot
+
+    # filters in the result dataframe only optimized results except for 'param'
+    mask = np.full((df_gsc_transl.shape[0],), True)
+    for k,v in best_params_transl.items():
+        mask = mask & (df_gsc_transl[k]==v)
+    df_gsc_filt = df_gsc.loc[mask]
+    li_scores = gsc.get_params()['scoring']          
+    df_sel_scores = df_gsc_filt[li_scores+[param]].set_index(param)
+    df_res = df_gsc_transl
+    if return_df_res:
+        return best_params, df_sel_scores, df_gsc_filt, df_res
+    else:
+        return best_params, df_sel_scores, df_gsc_filt
+
+
+'''Takes a dataframe of clusters number (prediction) for a set of observation, 
+and computes the ARI score between pairs of columns.
+Two modes are available:
+- first_vs_others=False: to check the initialisation stability.
+The columns are obtains for n_columns iterations of the same model
+with different initialisation
+- first_vs_others=True: to compare the predictions obtained with the whole
+dataset (first column) and predictions obtained with a sample
+(the other columns)
+Return a pd.Series of the ARI scores (values) for each pair of columns (index).
+'''
+
+from sklearn.metrics import adjusted_rand_score
+
+def comp_clust_metrics_col_pairs(df_mult_ser_clust, n_score='ari',
+                                 first_vs_others=False, print_opt=True):
+    
+    def cat_clust_score(col1, col2, n_score='ari'):
+        dict_scores = {'ami': adjusted_mutual_info_score(col1, col2),
+                       'ari': adjusted_rand_score(col1, col2),
+                       'homog': homogeneity_score(col1, col2),
+                       'complet': completeness_score(col1, col2),
+                       'v_meas': v_measure_score(col1, col2)}
+        return dict_scores[n_score]
+
+    n_columns = len(df_mult_ser_clust.columns)
+    n_clust = df_mult_ser_clust.nunique().mean()
+    if n_clust != df_mult_ser_clust.nunique().median():
+        print("ERROR: all the columns don't have the same number of clusters")
+        return None
+    
+    # Computes chosen category/clusters comparing scores for each pair of models
+    clust_scores = []
+    if first_vs_others: # first columns versus the others
+        pairs_list = [(df_mult_ser_clust.columns[0],
+                       df_mult_ser_clust.columns[i]) for i in range(1, n_columns)]
+        if print_opt: print("--- {} between first\
+ and the {} others ---".format(n_score, n_columns-1))
+        name = f'{n_score}_{str(n_clust)}_1st_vs_others'
+    else: # all pairs
+        pairs_list = combinlist(df_mult_ser_clust.columns,2)
+        if print_opt: print(f"--- {n_score} all {len(pairs_list)} \
+unique pairs ---")
+        name = f'{n_score}_{str(n_clust)}_all_pairs'
+
+    for i, j in pairs_list:
+        clust_scores.append(cat_clust_score(df_mult_ser_clust.loc[:,i],
+                                            df_mult_ser_clust.loc[:,j],
+                                            n_score = n_score))
+
+    # Compute the mean and standard deviation of category/clusters scores
+    clust_sc_mean, clust_sc_std = np.mean(clust_scores), np.std(clust_scores)
+    clust_sc_min, clust_sc_max = np.min(clust_scores), np.max(clust_scores)
+    if print_opt: print("{}: mean={:.3f}, std={:.3f}, min={:.3f}, max={:.3f} "\
+                        .format(n_score, clust_sc_mean, clust_sc_std,
+                                 clust_sc_min, clust_sc_max))
+
+    return pd.Series(np.array(clust_scores), index=pairs_list, name=name)
+
+''' Transformer that translates all the non numeric values into strings
+(including None) in a dict or a dataframe (column wise)
+'''
+import numbers
+# si contient des None, alors convertir tous les objects en string
+
+def object_none_translater(dict_or_df):
+    if type(dict_or_df) == dict:
+        # Change any non numeric value to string
+        dict_or_df_transl = {k: v if isinstance(v, numbers.Number) else str(v)\
+                             for k,v in dict_or_df.items()}
+    elif type(dict_or_df) == pd.core.frame.DataFrame:
+        # Change None to str (so the type of any None-containing col becomes 'object')
+        dict_or_df_transl = dict_or_df.fillna('None')
+        # Convert the content of all object columns to strings
+        cols = dict_or_df_transl.select_dtypes('object').columns
+        dict_or_df_transl[cols] = dict_or_df_transl[cols].applymap(lambda x: str(x))
+    else:
+        print("ERROR: you passed an object to 'object_none_translater'\
+ that is neither a dict nor a pd.DataFrame")
+    return dict_or_df_transl
+
+
+''' Plots a selection of scores (scores) or all the scores (scores=None)
+obtained during the GridSearchClust as a collection of line graphs.
+The other parameters (not plotted) are the parameters of the best estimator
+(found by gridsearch). They're the same for all the line plot (contrary to
+the 'plot_2Dgsclust_param_opt where other params may differ for each cell).
+'''
+
+def plot_gsc_multi_scores(gsc, param, title = None, x_log=False,
+                          loc='best', figsize = (12, 4), scores=None):
+
+    best_params, df_sel_scores, _ = filters_gsclust_results(gsc,param)
+    results = df_sel_scores
+    
+    scoring = gsc.scoring if scores is None else scores
+
+    fig, axs = plt.subplots(1,len(scoring))
+    fig.set_size_inches(figsize)
+
+    li_colors = ['b', 'r', 'g', 'purple', 'orange', 'brown', 'grey']
+    if len(axs)==1 : axs = [axs]
+
+    # Get the regular np array from the MaskedArray
+        
+    X_axis = np.array(results.index, dtype='float')
+
+    for scorer, color, ax in zip(sorted(scoring), li_colors[:len(scoring)], axs):
+        score = df_sel_scores[scorer].values
+        
+        df_ = pd.DataFrame({'param': X_axis,
+                            'score': score,
+                            # 'std': None,
+                            }).sort_values(by='param')
+        # ax.fill_between(df_['param'],
+        #                 df_['score'] - df_['std'],
+        #                 df_['score'] + df_['std'],
+        #                 alpha=0.1, color=color)
+        ax.plot(df_['param'], df_['score'], '-', marker='o', markersize=3,
+            color=color, alpha=1)
+        if x_log: ax.set_xscale('log')
+        ax.set_title(scorer)
+
+        y_min, y_max = ax.get_ylim()
+        
+        # Plot a dotted vertical line at the best score for that scorer marked by x
+        best_score = results.loc[best_params[param], scorer]
+        ax.plot([best_params[param], ] * 2, [y_min - abs(y_min)*0.1, best_score],
+            linestyle='dotted', color=color, marker='x', markeredgewidth=3, ms=8)
+        ax.set_ylim(y_min, y_max)
+        ax.set_xlabel(param)
+        ax.set_ylabel("Score")
+        # ax.legend(loc=loc)
+
+        # Annotate the best score for that scorer
+        len_str = len("{:.2f}".format(best_score))
+        if best_params[param] < np.mean(X_axis):
+            x_pos = best_params[param]*(1+0.015*len_str)
+        else:
+            x_pos = best_params[param]*(1-0.015*len_str)
+        y_pos = best_score*1+(y_max-y_min)*0.05
+        ax.annotate("{:0.2f}".format(best_score), 
+                    (x_pos, y_pos),
+                    color = color)  
+    if title is not None:
+        fig.suptitle(title, fontsize=16, fontweight='bold')
+        plt.tight_layout(rect=(0,0,1,0.92))
+    else:
+        plt.tight_layout()
+    plt.show()
+
+
+''' Takes a GridSearchClust object and plots a heatmap of a chosen score (score)
+against 2 chosen parameters.
+NB: the score displayed for each cell is the one for the best other parameters.
+'''
+
+def plot_2D_gsclust_param_opt(gsc, params=None, score=None,
+                           title=None, shorten_label=7, ax=None):
+
+    ax = plt.subplot(1,1,1) if ax is None else ax
+
+    score = 'refit_score' if score is None else score
+
+    params_gsc = params
+
+    _, _, _, df_res = filters_gsclust_results(gsc, params_gsc[0],
+                                              return_df_res=True)
+    max_scores = df_res.groupby(params_gsc).agg(lambda x: max(x))[score]
+    sns.heatmap(max_scores.unstack(), annot=True, fmt='.4g', ax=ax)
+
+    if shorten_label != False:
+        thr = int(shorten_label)
+        lab_x = [item.get_text() for item in ax.get_xticklabels()]
+        short_lab_x = [s[:thr]+'...'+s[-thr:] if len(s)>thr else s for s in lab_x]
+        ax.axes.set_xticklabels(short_lab_x)
+        lab_y = [item.get_text() for item in ax.get_yticklabels()]
+        short_lab_y = [s[:thr]+'...'+s[-thr:] if len(s)>thr else s for s in lab_y]
+        ax.axes.set_yticklabels(short_lab_y)
+
+    title = score if title is None else title
+    ax.set_title(title)
+
+# from sklearn.cluster import KMeans
+
+# def clustering_doc_matrix(doc_matrix_df, name, n_clusters=7):
+#     # Creating the Kmeans model
+#     km = KMeans(n_clusters = n_clusters)
+#     # Fitting the Kmeans model
+#     km.fit(doc_matrix_df)
+#     ser = pd.Series(km.labels_,
+#                     index = doc_matrix_df.index,
+#                     name = name)
+#     return ser
+
+# from sklearn.decomposition import NMF
+# from sklearn.decomposition import LatentDirichletAllocation as LDA
+# from sklearn.decomposition import TruncatedSVD
+
+# def topicsmodeler_doc_matrix(doc_matrix_df, n_model, name, n_components=7):
+
+#     dict_models = {'lsa': TruncatedSVD(),
+#                    'nmf': NMF(init="nndsvd"),
+#                    'lda': LDA()}
+#     model = dict_models[n_model]
+
+#     # Instantiation the topic modeler
+#     model.set_params(n_components = n_components)
+
+#     # Fitting the the topic modeler
+#     model.fit(doc_matrix_df)
+
+#     # DOCUMENTS/TOPICS Matrix
+#     W = pd.DataFrame(model.fit_transform(doc_matrix_df.values),
+#                      index=doc_matrix_df.index, # documents
+#                      columns=['topic_'+str(i)\
+#                               for i in range(1,n_components+1)]) # topics
+
+#     # TOPICS/WORDS Matrix
+#     H = pd.DataFrame(model.components_,
+#                      index=['topic_'+str(i)\
+#                             for i in range(1,n_components+1)], # topics
+#                      columns=doc_matrix_df.columns) # words
+
+#     # Converting topics scores to best cluster label (higher val column)
+#     ser_res = pd.Series(W.idxmax(1),
+#                         index = W.index,
+#                         name = name)
+
+#     return ser_res
