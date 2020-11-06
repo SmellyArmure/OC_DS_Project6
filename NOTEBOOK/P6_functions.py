@@ -364,39 +364,6 @@ the {term_doc_df.shape[1]} existing in our descriptions,\ni.e. \
     return w2v_emb_df
 
 
-''' Takes an image, resizes the image and fills the non existing space
-with white 
-'''
-
-import cv2
-import numpy as np
-from PIL import Image, ImageOps
-from PIL.ImageFilter import GaussianBlur
-
-def preproc_image(img, size=224, fill_col=(255,255,255),
-                  autocontrast = False, equalize=False,
-                  gauss_blur = None, interpolation=cv2.INTER_AREA):
-
-    img = Image.fromarray(img)
-    if autocontrast:
-        img = ImageOps.autocontrast(img)
-    if equalize:
-        img = ImageOps.equalize(img)
-    if gauss_blur is not None:
-        img = img.filter(GaussianBlur(radius=gauss_blur))
-
-    w, h = img.size
-    if h == w:
-        new_img = img
-    else:
-        dif = h if h > w else w
-        new_img = Image.new('RGB', (dif, dif), fill_col)
-        new_img.paste(img, (int((dif - w) / 2), int((dif - h) / 2)))
-
-    return cv2.resize(np.asarray(new_img), (size, size), interpolation)
-
-
-
 """ For a each number of clusters in a list ('list_n_clust'),
 - runs iterations ('n_iter' times) of a KMeans on a given dataframe,
 - computes the 4 scores : silhouette, davies-bouldin, calinski_harabasz and
@@ -992,7 +959,7 @@ Computing the trustworthiness category by category
 '''
 from sklearn.manifold import trustworthiness
 
-def groups_trustworthiness(df, df_proj, ser_clust):
+def groups_trustworthiness(df, df_proj, ser_clust, n_neighbors=5):
     
     gb_clust = df.groupby(ser_clust)
     tw_clust, li_clust = [], []
@@ -1000,7 +967,7 @@ def groups_trustworthiness(df, df_proj, ser_clust):
         li_clust.append(n_clust)
         tw_clust.append(trustworthiness(df.loc[ind_sub_df],
                                         df_proj.loc[ind_sub_df],
-                                        n_neighbors=5, metric='euclidean'))
+                                        n_neighbors=n_neighbors, metric='euclidean'))
     ser = pd.Series(tw_clust,
                     index=li_clust,
                     name='tw')
@@ -1010,13 +977,12 @@ def groups_trustworthiness(df, df_proj, ser_clust):
 with clusters coloring if model available (grey if no model given).
 NB: if the model wa already fitted, does not refit.'''
 
-
 import seaborn as sns
 from sklearn.manifold import trustworthiness
 from sklearn.preprocessing import LabelEncoder
 
 def plot_projection_cat_clust(df, model=None, ser_clust = None, true_cat=None,
-                              proj='PCA', title=None, figsize=(5, 3),
+                              proj='PCA', tw_n_neigh=5, title=None, figsize=(5, 3),
                               size=1, edgelinesize=25, centersize=150,
                               palette='tab10', legend_on=False,
                               bboxtoanchor=None, fig=None, ax=None,
@@ -1057,10 +1023,12 @@ def plot_projection_cat_clust(df, model=None, ser_clust = None, true_cat=None,
             
     # Computing the global trustworthiness
     trustw = trustworthiness(df, dict_proj[proj],
-                             n_neighbors=5, metric='euclidean')
+                             n_neighbors=tw_n_neigh, metric='euclidean')
     # Computing the trustworthiness category by category
-    ser_tw_cat = groups_trustworthiness(df, dict_proj[proj], true_cat)
-    ser_tw_clust = groups_trustworthiness(df, dict_proj[proj], ser_clust)
+    ser_tw_cat = groups_trustworthiness(df, dict_proj[proj], true_cat,
+                                        n_neighbors=tw_n_neigh)
+    ser_tw_clust = groups_trustworthiness(df, dict_proj[proj], ser_clust,
+                                          n_neighbors=tw_n_neigh)
 
     # b1 - if ser_clust exists (either calculated from model or given)
     if ser_clust is not None:
@@ -1168,6 +1136,7 @@ def plot_projection_cat_clust(df, model=None, ser_clust = None, true_cat=None,
     ax.set_title(title + "\n(trustworthiness: {:.2f})".format(trustw),
                  fontsize=12, fontweight='bold')
     ax.set_xlabel('ax 1'), ax.set_ylabel('ax 2')
+
 
 
 '''
@@ -1639,6 +1608,8 @@ in actual scores (see the compute_score)
 '''
 
 import numpy as np
+import pandas as pd
+import copy
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.model_selection import ParameterGrid
 from collections import defaultdict
@@ -1649,18 +1620,19 @@ from sklearn.metrics import silhouette_score, calinski_harabasz_score,\
 
 class GridSearchClust(BaseEstimator, TransformerMixin):
 
-    def __init__(self, estimator, param_grid_estim, param_grid_preproc=None,
+    def __init__(self, estimator, param_grid_estim, #param_grid_preproc=None,
                  scoring=None, scoring_true_lab=None, refit='silh',
-                 greater_is_better=True):
+                 greater_is_better=True, return_estimators=True):
 
         # Get the parameters
         self.estimator = estimator
         self.param_grid_estim = param_grid_estim
-        self.param_grid_preproc = param_grid_preproc
+        # self.param_grid_preproc = param_grid_preproc
         self.scoring = scoring
         self.scoring_true_lab = scoring_true_lab
         self.refit = refit
         self.greater_is_better = greater_is_better
+        self.return_estimators = return_estimators
 
     def __compute_score(self, X, clust_lab, n_score):
 
@@ -1694,7 +1666,7 @@ class GridSearchClust(BaseEstimator, TransformerMixin):
 
         for i, param in enumerate(ParameterGrid(self.param_grid_estim),1):
 
-            if verbose: print(f"{i}/{nb_params}:")
+            if verbose: print('\r', f"{i}/{nb_params}:", end='')
 
             # Change the parameters of the estimator
             self.estimator = self.estimator.set_params(**param)
@@ -1748,7 +1720,9 @@ class GridSearchClust(BaseEstimator, TransformerMixin):
             # saving results, parameters and models in a dict
             self.results_["refit_score"].append(refit_score)  # refit score
             self.results_["params"].append(param)  # parameters
-            self.results_["estimators"].append(self.estimator)  # trained models
+            if self.return_estimators:
+                model_trans = copy.deepcopy(self.estimator)
+                self.results_["estimators"].append(self.estimator)  # trained models
             # self.results_["fit_times"].append(time_train)  # training time
 
         self.results_["scores"] = dict(estim_score)  # dict of lists of scores
@@ -1777,33 +1751,39 @@ class GridSearchClust(BaseEstimator, TransformerMixin):
         # Update attributes of the instance
         self.best_score_ = self.results_["refit_score"][best_estim_index]
         self.best_params_ = self.results_["params"][best_estim_index]
-        self.best_estimator_ = self.results_["estimators"][best_estim_index]
+        if self.return_estimators:
+            self.best_estimator_ = self.results_["estimators"][best_estim_index]
         self.best_index_ = best_estim_index
         # self.refit_time_ = self.results_["fit_times"][best_estim_index]
 
         # refit the best model
-        self.best_estimator_.fit(X)
+        if self.return_estimators:
+            self.best_estimator_.fit(X)
         
         return self
 
-    def transform(self, X, y=None):
 
-        # If the estimator is a pipe,
-        if hasattr(self.best_estimator_, 'steps'): # if estimator is a pipeline
-            best_pipe_wo_last_estim = Pipeline(self.best_estimator_.steps[0:-1])
-            # compute the first steps separately
-            X_trans = best_pipe_wo_last_estim.fit_transform(X)
-            # fit the last estimator
-        else:
-            print("No multistep pipeline: returned only the original dataframe...")
-            X_trans = X
+# For some unknown reason, transform and predict do not work as it should :
+# the best model is not really the best 
+
+    # def transform(self, X, y=None):
+
+    #     # If the estimator is a pipe,
+    #     if hasattr(self.best_estimator_, 'steps'): # if estimator is a pipeline
+    #         best_pipe_wo_last_estim = Pipeline(self.best_estimator_.steps[0:-1])
+    #         # compute the first steps separately
+    #         X_trans = best_pipe_wo_last_estim.fit_transform(X)
+    #         # fit the last estimator
+    #     else:
+    #         print("No multistep pipeline: returned only the original dataframe...")
+    #         X_trans = X
        
-        return X_trans
+    #     return X_trans
 
-    def predict(self, X, y=None):
+    # def predict(self, X, y=None):
 
-        # use the .predict method of the best estimator on the best model
-        return self.best_estimator_.predict(X)
+    #     # use the .predict method of the best estimator on the best model
+    #     return self.best_estimator_.predict(X)
 
 ''' Takes a GridSearchClust object and the name of one parameter of the
 estimator (or of the pipeline) and isolate the influence of this parameter
@@ -2010,7 +1990,7 @@ against 2 chosen parameters.
 NB: the score displayed for each cell is the one for the best other parameters.
 '''
 
-def plot_2D_gsclust_param_opt(gsc, params=None, score=None,
+def plot_2D_gsclust_param_opt(gsc, params=None, score=None, fmt='.4g',
                            title=None, shorten_label=7, ax=None):
 
     ax = plt.subplot(1,1,1) if ax is None else ax
@@ -2022,7 +2002,7 @@ def plot_2D_gsclust_param_opt(gsc, params=None, score=None,
     _, _, _, df_res = filters_gsclust_results(gsc, params_gsc[0],
                                               return_df_res=True)
     max_scores = df_res.groupby(params_gsc).agg(lambda x: max(x))[score]
-    sns.heatmap(max_scores.unstack(), annot=True, fmt='.4g', ax=ax)
+    sns.heatmap(max_scores.unstack(), annot=True, fmt=fmt, ax=ax)
 
     if shorten_label != False:
         thr = int(shorten_label)
