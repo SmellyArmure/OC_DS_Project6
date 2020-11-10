@@ -1349,6 +1349,7 @@ import numpy as np
 import pandas as pd
 from wikipedia2vec import Wikipedia2Vec
 
+from wikipedia2vec import Wikipedia2Vec
 
 class CustNLPTransformer(BaseEstimator, TransformerMixin):
 
@@ -1492,14 +1493,16 @@ class CustNLPTransformer(BaseEstimator, TransformerMixin):
                                             fill_value=0),
                         fill_value=0)
         # if word_embedding is enabled, projection of the BOW on a given w2v
-        if self.w2v is not None:
-            df_trans = proj_term_doc_on_w2v(df_trans, self.w2v,
+        if self.w2v:
+            wiki2vec = Wikipedia2Vec.load("../DATA/enwiki_20180420_100d.pkl")
+            df_trans = proj_term_doc_on_w2v(df_trans, wiki2vec,
                                             print_opt=False)
         return df_trans
 
     def fit_transform(self, X, y=None):
         self.fit(X, y)
         return self.transform(X, y)
+
 
 ''' Builds a topics modeler which parameters (model, number of topics)
 can be optimized in a GridSearchClust.
@@ -1763,27 +1766,26 @@ class GridSearchClust(BaseEstimator, TransformerMixin):
         return self
 
 
-# For some unknown reason, transform and predict do not work as it should :
-# the best model is not really the best 
+# NB: The transform method will return the dtaframe just before the clustering
 
-    # def transform(self, X, y=None):
+    def transform(self, X, y=None):
 
-    #     # If the estimator is a pipe,
-    #     if hasattr(self.best_estimator_, 'steps'): # if estimator is a pipeline
-    #         best_pipe_wo_last_estim = Pipeline(self.best_estimator_.steps[0:-1])
-    #         # compute the first steps separately
-    #         X_trans = best_pipe_wo_last_estim.fit_transform(X)
-    #         # fit the last estimator
-    #     else:
-    #         print("No multistep pipeline: returned only the original dataframe...")
-    #         X_trans = X
+        # If the estimator is a pipe,
+        if hasattr(self.best_estimator_, 'steps'): # if estimator is a pipeline
+            best_pipe_wo_last_estim = Pipeline(self.best_estimator_.steps[0:-1])
+            # compute the first steps separately
+            X_trans = best_pipe_wo_last_estim.fit_transform(X)
+            # fit the last estimator
+        else:
+            print("No multistep pipeline: returned only the original dataframe...")
+            X_trans = X
        
-    #     return X_trans
+        return X_trans
 
-    # def predict(self, X, y=None):
+    def predict(self, X, y=None):
 
-    #     # use the .predict method of the best estimator on the best model
-    #     return self.best_estimator_.predict(X)
+        # use the .predict method of the best estimator on the best model
+        return self.best_estimator_.predict(X)
 
 ''' Takes a GridSearchClust object and the name of one parameter of the
 estimator (or of the pipeline) and isolate the influence of this parameter
@@ -1801,7 +1803,7 @@ def filters_gsclust_results(gsc, param, return_df_res=False):
     for k, v in gsc_res.items():
         if type(v) == dict: # dict de listes : scores
             df_ = pd.DataFrame(v)
-        elif type(v) == list:
+        elif type(v) == list and len(v)!=0:
             if type(v[0]) == dict: # liste de dicts : params
                 df_ = pd.DataFrame(v)
                 li_params = df_.columns
@@ -1812,7 +1814,7 @@ def filters_gsclust_results(gsc, param, return_df_res=False):
             df_ = pd.DataFrame(v, columns=[k])
         df_gsc = pd.concat([df_gsc, df_], axis=1)
     df_gsc_transl = object_none_translater(df_gsc)
-
+    
     # selects in the data frame the best params
     best_params = gsc.best_params_.copy() # dict of the best params
     # translation of all the non numeric values into strings (including None)
