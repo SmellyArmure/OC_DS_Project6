@@ -1503,7 +1503,6 @@ class CustNLPTransformer(BaseEstimator, TransformerMixin):
         self.fit(X, y)
         return self.transform(X, y)
 
-
 ''' Builds a topics modeler which parameters (model, number of topics)
 can be optimized in a GridSearchClust.
 .transform: returns the DOCUMENTS/TOPICS matrix
