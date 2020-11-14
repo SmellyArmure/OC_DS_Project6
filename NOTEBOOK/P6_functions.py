@@ -14,6 +14,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 
+
 def plot_heatmap(corr, title, figsize=(8, 4), vmin=-1, vmax=1, center=0,
                  palette=sns.color_palette("coolwarm", 20), shape='rect',
                  fmt='.2f', robust=False, fig=None, ax=None):
@@ -28,7 +29,6 @@ def plot_heatmap(corr, title, figsize=(8, 4), vmin=-1, vmax=1, center=0,
     else:
         print('ERROR : this type of heatmap does not exist')
 
-    palette = palette
     ax = sns.heatmap(corr, mask=mask, cmap=palette, vmin=vmin, vmax=vmax,
                      center=center, annot=True, annot_kws={"size": 10}, fmt=fmt,
                      square=False, linewidths=.5, linecolor='white',
@@ -187,7 +187,15 @@ NB: if the model wa already fitted, does not refit.'''
 
 import seaborn as sns
 
-def plot_projection(df, model=None, ser_clust = None, proj='PCA', title=None,
+
+''' Plots the points on two axis (projection choice available : PCA, UMAP, t-SNE)
+with clusters coloring if model available (grey if no model given).
+NB: if the model wa already fitted, does not refit.'''
+
+import seaborn as sns
+
+def plot_projection(df, model=None, ser_clust = None, proj='PCA',
+                    tw_n_neigh=5, title=None, bboxtoanchor=None,
                     figsize=(5, 3), size=1, palette='tab10',
                     legend_on=False, fig=None, ax=None, random_state=14):
 
@@ -227,6 +235,13 @@ def plot_projection(df, model=None, ser_clust = None, proj='PCA', title=None,
         n_clust = ser_clust.nunique()
         colors = sns.color_palette(palette, n_clust).as_hex()
 
+    # Computing the global trustworthiness
+    trustw = trustworthiness(df, dict_proj[proj],
+                            n_neighbors=tw_n_neigh, metric='euclidean')
+    # Computing the trustworthiness category by category
+    ser_tw_clust = groups_trustworthiness(df, dict_proj[proj], ser_clust,
+                                          n_neighbors=tw_n_neigh)
+
     # b1 - if ser_clust exists (either calculated from model or given)
     if ser_clust is not None:
 
@@ -240,18 +255,23 @@ def plot_projection(df, model=None, ser_clust = None, proj='PCA', title=None,
 
             # Showing the clusters centers
             ax.scatter(dict_proj_centers[proj].iloc[:, 0].loc[name_clust],
-                        dict_proj_centers[proj].iloc[:, 1].loc[name_clust],#.values[i],
+                        dict_proj_centers[proj].iloc[:, 1].loc[name_clust],
                         marker='o', c=colors[i], alpha=0.7, s=150,
                        edgecolor='k',
-                       label=f"{i}: {name_clust}", zorder=10)
+                       label="{}: {} | tw={:0.2f}".format(i, name_clust,
+                                                          ser_tw_clust[name_clust]),
+                       zorder=10) # for the labels only
             # Showing the clusters centers labels (number)
-            ax.scatter(dict_proj_centers[proj].iloc[:, 0].loc[name_clust],#.values[i],
+            ax.scatter(dict_proj_centers[proj].iloc[:, 0].loc[name_clust],
                         dict_proj_centers[proj].iloc[:, 1].loc[name_clust],
                         marker=r"$ {} $".format(i),#
                         c='k', alpha=1, s=70, zorder=100)
             if legend_on:
+                plt.legend().get_frame().set_alpha(0.3)
+            if bboxtoanchor is not None:
+                plt.legend(bbox_to_anchor=bboxtoanchor)
+            else: 
                 plt.legend()
-                ax.legend().get_frame().set_alpha(0.3)
 
 
     # b2 - if no ser_clust: only plot points in grey
@@ -266,8 +286,10 @@ def plot_projection(df, model=None, ser_clust = None, proj='PCA', title=None,
                    dict_proj[proj].iloc[:, 1],
                    s=size, alpha=0.7, c='grey')
 
-    title = "Projection: " + proj if title is None else title
-    ax.set_title(title, fontsize=12, fontweight='bold')
+    title = "Projection: " + proj + "(trustworthiness: {:.2f})".format(trustw)\
+             if title is None else title
+    ax.set_title(title + "\n(trustworthiness: {:.2f})".format(trustw),
+                 fontsize=12, fontweight='bold')
     ax.set_xlabel('ax 1'), ax.set_ylabel('ax 2')
 
 
@@ -890,9 +912,14 @@ from scipy.optimize import linear_sum_assignment
 def confusion_matrix_clust(true_cat, clust_lab, normalize=False,
                            margins_sums=False, margins_score=False):
 
+from sklearn.preprocessing import FunctionTransformer
+from scipy.optimize import linear_sum_assignment
+
+def conf_matr_max_diago(true_cat, clust_lab, normalize=False):
+
     ### Count the number of articles in eact categ/clust pair
     cross_tab = pd.crosstab(true_cat, clust_lab,
-                         normalize=normalize)
+                            normalize=normalize)
 
     ### Rearrange the lines and columns to maximize the diagonal values sum
     # Take the invert values in the matrix
@@ -913,6 +940,48 @@ def confusion_matrix_clust(true_cat, clust_lab, normalize=False,
 
     if normalize == False:
         result = result.round(0).astype(int)
+
+    return result
+
+'''
+Function that takes a pd.Series of labels (same number of different labels
+in each column) and attribute a harmonized set of names to all the columns.
+The names are chosen in order to maximize the diagonal of a confusion matrix
+made on true-categories and each column.
+NB: if no true_category series is given, the first columns is considered 
+as the true_category series.  
+'''
+
+def categ_identificator(df_labels, true_cat=None):
+
+    # takes the first columns as true category if true_cat not specified
+    if true_cat is None:
+        true_cat_ser = df_labels.iloc[:,0]
+        df_labels = df_labels.iloc[:,1:]
+    else:
+        true_cat_ser = true_cat
+
+    df_ = pd.DataFrame()
+
+    # loop on all the lists of labels
+    for col in df_labels.columns:
+        # generate a confusion matrix that maximizes the diagonal
+        cm = conf_matr_max_diago(true_cat_ser, df_labels[col],
+                                normalize=False)
+        # generate a translation dictionary to apply to the column col
+        transl = dict(zip(cm.columns, cm.index))
+        df_[col] = df_labels[col].map(transl)
+
+    # if true_cat was the first columns, reinsert
+    if true_cat is None:
+        df_.insert(0, true_cat_ser.name, true_cat_ser)
+    return df_
+
+
+def plot_conf_matrix_cat_vs_clust(true_cat, clust_lab, normalize=False,
+                                  margins_sums=False, margins_score=False):
+
+    result = conf_matr_max_diago(true_cat, clust_lab, normalize=normalize)
 
     if margins_sums:
         # assign the sums margins to the result dataframe
@@ -1033,7 +1102,7 @@ def plot_projection_cat_clust(df, model=None, ser_clust = None, true_cat=None,
     # b1 - if ser_clust exists (either calculated from model or given)
     if ser_clust is not None:
         # Prepare the correpondance between categories and clusters
-        cm = confusion_matrix_clust(true_cat,ser_clust)
+        cm = conf_matr_max_diago(true_cat,ser_clust)
         cat_list = cm.index # liste des catégories, dans l'ordre
         clust_list = cm.columns # liste des clusters, dans l'ordre
 
@@ -1509,7 +1578,7 @@ can be optimized in a GridSearchClust.
 .predict: returns the list of the most probable topic for each document
 NB: takes a dataframe as X.
 '''
-from sklearn.base import BaseEstimator
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import *
@@ -1609,6 +1678,7 @@ and a scoring function or a dict of scores (scoring) to be translated
 in actual scores (see the compute_score)
 '''
 
+
 import numpy as np
 import pandas as pd
 import copy
@@ -1652,6 +1722,51 @@ class GridSearchClust(BaseEstimator, TransformerMixin):
                }
         return dict_scores[n_score]
 
+    # Generates a dataframe of all the models tested, their scores and parameters
+    def __results_to_df(self):
+
+        gsc_res = self.results_
+        df_gsc = pd.DataFrame()
+        for k, v in gsc_res.items():
+            if k == 'scores': # dict de listes : scores (que des nbes OK)
+                df_ = pd.DataFrame(v)
+                # li_scores = df_.columns
+            elif k =='params': # liste de dicts : params
+                df_ = pd.DataFrame(v)
+                li_params = df_.columns
+            else: # liste d'objets (estimators) ou de nombres (refit_score)
+                df_ = pd.DataFrame(v, columns=[k])
+            # concatène les colonnes
+            df_gsc = pd.concat([df_gsc, df_], axis=1)
+        return df_gsc
+
+    # Fills None or np.nan values in a dataframe accordingly to the type
+    # of the column:'None' string if the column type is 'object' np.nan otherwise
+    def __selective_null_filler(self, df):
+
+        obj_cols = df.select_dtypes(include=['object']).columns
+        num_cols = df.select_dtypes(include=[np.number]).columns
+        values = dict([(col, 'None') if col in obj_cols else (col, np.nan) \
+                                                            for col in df])
+        return df.fillna(value=values)
+
+    # Find best parameters for a given score
+    def __get_best_params(self, n_score):
+
+        df_ = self.__results_to_df()
+        li_params = pd.DataFrame(self.results_['params']).columns
+        # concatenate the .results in a dataframe and fills None values
+        df_fillna = self.__selective_null_filler(self.__results_to_df())
+        # find best params (filled values) for the given score
+        best_index = df_fillna[n_score].idxmax()
+        best_params = df_fillna.loc[best_index].loc[li_params] # best params with nan filled
+        return best_params, best_index, df_fillna
+
+    # Find best estimator for a given score
+    def __get_best_estimator(self, n_score):
+
+        _, best_index, df_fillna = self.__get_best_params(n_score)
+        return df_fillna.loc[best_index]['estimators']
 
     def fit(self, X, verbose=False):
 
@@ -1724,7 +1839,7 @@ class GridSearchClust(BaseEstimator, TransformerMixin):
             self.results_["params"].append(param)  # parameters
             if self.return_estimators:
                 model_trans = copy.deepcopy(self.estimator)
-                self.results_["estimators"].append(self.estimator)  # trained models
+                self.results_["estimators"].append(model_trans)  # trained models
             # self.results_["fit_times"].append(time_train)  # training time
 
         self.results_["scores"] = dict(estim_score)  # dict of lists of scores
@@ -1765,13 +1880,18 @@ class GridSearchClust(BaseEstimator, TransformerMixin):
         return self
 
 
-# NB: The transform method will return the dtaframe just before the clustering
+# NB: The transform method will return the dataframe just before the clustering
 
-    def transform(self, X, y=None):
+    def transform(self, X, y=None, optim_score=None):
+
+        if optim_score is None:
+            best_model = self.best_estimator_
+        else:
+            best_model = self.__get_best_estimator(optim_score)
 
         # If the estimator is a pipe,
-        if hasattr(self.best_estimator_, 'steps'): # if estimator is a pipeline
-            best_pipe_wo_last_estim = Pipeline(self.best_estimator_.steps[0:-1])
+        if hasattr(best_model, 'steps'): # if estimator is a pipeline
+            best_pipe_wo_last_estim = Pipeline(best_model.steps[0:-1])
             # compute the first steps separately
             X_trans = best_pipe_wo_last_estim.fit_transform(X)
             # fit the last estimator
@@ -1781,57 +1901,15 @@ class GridSearchClust(BaseEstimator, TransformerMixin):
        
         return X_trans
 
-    def predict(self, X, y=None):
+    def predict(self, X, y=None, optim_score=None):
+
+        if optim_score is None:
+            best_model = self.best_estimator_
+        else:
+            best_model = self.__get_best_estimator(optim_score)
 
         # use the .predict method of the best estimator on the best model
-        return self.best_estimator_.predict(X)
-
-''' Takes a GridSearchClust object and the name of one parameter of the
-estimator (or of the pipeline) and isolate the influence of this parameter
-on all the scores available in the scv (scoring)
--> returns a dictionary of the best other fixed parameters
-and a dataframe of the scores depending on the chosen parameter and a 
-filtered results_ dataframe that can be used
-in the 'plot_scv_multi_scores' function '''
-
-def filters_gsclust_results(gsc, param, return_df_res=False):
-
-    gsc_res = gsc.results_
-    # Generate a dataframe of all the models tested, their scores and parameters
-    df_gsc = pd.DataFrame()
-    for k, v in gsc_res.items():
-        if type(v) == dict: # dict de listes : scores
-            df_ = pd.DataFrame(v)
-        elif type(v) == list and len(v)!=0:
-            if type(v[0]) == dict: # liste de dicts : params
-                df_ = pd.DataFrame(v)
-                li_params = df_.columns
-            else: # liste d'objets (estimators) ou de nombres (refit_score)
-                df_ = pd.DataFrame(v, columns=[k])
-        else:
-            col_names = [str(k)]
-            df_ = pd.DataFrame(v, columns=[k])
-        df_gsc = pd.concat([df_gsc, df_], axis=1)
-    df_gsc_transl = object_none_translater(df_gsc)
-    
-    # selects in the data frame the best params
-    best_params = gsc.best_params_.copy() # dict of the best params
-    # translation of all the non numeric values into strings (including None)
-    best_params_transl = object_none_translater(best_params) 
-    del best_params_transl[param] # remove the parameter that we want to plot
-
-    # filters in the result dataframe only optimized results except for 'param'
-    mask = np.full((df_gsc_transl.shape[0],), True)
-    for k,v in best_params_transl.items():
-        mask = mask & (df_gsc_transl[k]==v)
-    df_gsc_filt = df_gsc.loc[mask]
-    li_scores = gsc.get_params()['scoring']          
-    df_sel_scores = df_gsc_filt[li_scores+[param]].set_index(param)
-    df_res = df_gsc_transl
-    if return_df_res:
-        return best_params, df_sel_scores, df_gsc_filt, df_res
-    else:
-        return best_params, df_sel_scores, df_gsc_filt
+        return best_model.predict(X)
 
 
 '''Takes a dataframe of clusters number (prediction) for a set of observation, 
@@ -1916,6 +1994,91 @@ def object_none_translater(dict_or_df):
     return dict_or_df_transl
 
 
+
+'''
+Generates a dataframe of all the models tested, their scores and parameters
+'''
+def results_to_df(gsc):
+
+    df_gsc = pd.DataFrame()
+    for k, v in gsc.results_.items():
+        if k == 'scores': # dict de listes : scores (que des nbes OK)
+            df_ = pd.DataFrame(v)
+            # li_scores = df_.columns
+        elif k =='params': # liste de dicts : params
+            df_ = pd.DataFrame(v)
+            li_params = df_.columns
+        else: # liste d'objets (estimators) ou de nombres (refit_score)
+            df_ = pd.DataFrame(v, columns=[k])
+        # concatène les colonnes
+        df_gsc = pd.concat([df_gsc, df_], axis=1)
+    # df_gsc_transl = object_none_translater(df_gsc)
+    return df_gsc
+
+'''
+Fills None or np.nan values in a dataframe accordingly to the type
+of the column:
+'None' string if the column type is 'object'
+np.nan otherwise
+'''
+
+def selective_null_filler(df):
+    obj_cols = df.select_dtypes(include=['object']).columns
+    num_cols = df.select_dtypes(include=[np.number]).columns
+    values = dict([(col, 'None') if col in obj_cols else (col, np.nan) \
+                                                        for col in df])
+    return df.fillna(value=values)
+
+'''
+Find best parameters for a given score
+'''
+def get_best_params(gsc, n_score=None):
+    n_score = gsc.refit if n_score is None else n_score
+    gsc_res = gsc.results_
+    df_ = results_to_df(gsc)
+    li_params = pd.DataFrame(gsc_res['params']).columns
+    # concatenate the .results in a dataframe and fills None values
+    df_fillna = selective_null_filler(results_to_df(gsc))
+    # find best params (filled values) for the given score
+    best_index = df_fillna[n_score].idxmax()
+    best_params = df_fillna.loc[best_index].loc[li_params] # best params with nan filled
+    return best_params, best_index, df_fillna
+
+
+'''
+Find best estimator for a given score
+'''
+
+def get_best_estimator(gsc, n_score):
+    _, best_index, df_fillna = get_best_params(gsc, n_score)
+    return df_fillna.loc[best_index]['estimators']
+
+'''
+From a fitted gsc (GridSearchClust) object and a param, returns
+a sub dataframe of all the scores as a function of one chosen parameter (param)
+NB: all other parameters are set to the values in best_params.
+''' 
+# fonction qui sort un dataframe partiel des résultats pour tous les scores,
+# mais en fonction d'un seul paramètre
+
+def filters_gsc_results(gsc, param, n_score=None):
+
+    n_score = gsc.refit if n_score is None else n_score
+    best_params, best_index, df_fillna = get_best_params(gsc, n_score)
+    li_scores = gsc.results_['scores'].keys()
+    df_filt = df_fillna.copy('deep')
+    for par, val in best_params.iteritems():
+        if par!= param:
+            if type(val) == np.float64: # nan or float
+                if not np.isnan(val): # not a nan (no more None in df_filt (=df_fillna))
+                    df_filt = df_filt[df_filt[par]==val]
+                else: # special filter for nan values among floats
+                    df_filt = df_filt[df_filt[par].isna()]
+            else: # string or object
+                df_filt = df_filt[df_filt[par]==val]
+    df_filt = df_filt.set_index(param)[li_scores]
+    return df_filt
+
 ''' Plots a selection of scores (scores) or all the scores (scores=None)
 obtained during the GridSearchClust as a collection of line graphs.
 The other parameters (not plotted) are the parameters of the best estimator
@@ -1924,10 +2087,10 @@ the 'plot_2Dgsclust_param_opt where other params may differ for each cell).
 '''
 
 def plot_gsc_multi_scores(gsc, param, title = None, x_log=False,
-                          loc='best', figsize = (12, 4), scores=None):
+                          figsize = (12, 4), scores=None, optim_score=None):
 
-    best_params, df_sel_scores, _ = filters_gsclust_results(gsc,param)
-    results = df_sel_scores
+    results = filters_gsc_results(gsc, param, optim_score)
+    best_params, best_index, _ = get_best_params(gsc, optim_score)
     
     scoring = gsc.scoring if scores is None else scores
 
@@ -1942,16 +2105,12 @@ def plot_gsc_multi_scores(gsc, param, title = None, x_log=False,
     X_axis = np.array(results.index, dtype='float')
 
     for scorer, color, ax in zip(sorted(scoring), li_colors[:len(scoring)], axs):
-        score = df_sel_scores[scorer].values
+        score = results[scorer].values
         
         df_ = pd.DataFrame({'param': X_axis,
                             'score': score,
-                            # 'std': None,
                             }).sort_values(by='param')
-        # ax.fill_between(df_['param'],
-        #                 df_['score'] - df_['std'],
-        #                 df_['score'] + df_['std'],
-        #                 alpha=0.1, color=color)
+
         ax.plot(df_['param'], df_['score'], '-', marker='o', markersize=3,
             color=color, alpha=1)
         if x_log: ax.set_xscale('log')
@@ -1966,7 +2125,6 @@ def plot_gsc_multi_scores(gsc, param, title = None, x_log=False,
         ax.set_ylim(y_min, y_max)
         ax.set_xlabel(param)
         ax.set_ylabel("Score")
-        # ax.legend(loc=loc)
 
         # Annotate the best score for that scorer
         len_str = len("{:.2f}".format(best_score))
@@ -1984,6 +2142,7 @@ def plot_gsc_multi_scores(gsc, param, title = None, x_log=False,
     else:
         plt.tight_layout()
     plt.show()
+
 
 
 ''' Takes a GridSearchClust object and plots a heatmap of a chosen score (score)
