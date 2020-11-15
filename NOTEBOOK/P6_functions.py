@@ -895,54 +895,6 @@ class CustTransformer(BaseEstimator):
                                 columns=self.get_feature_names(X, y))
 
 
-
-'''
-Takes two series giving for each row :
-- the true label
-- the cluster label
-Then computes the matrix counting each pair of true category/ cluster label.
-Then reorder the lines and columns in order to have maximum diagonal.
-The best bijective correspondance between categories and clusters is obtained by
- list(zip(result.columns, result.index))
-'''
-
-from sklearn.preprocessing import FunctionTransformer
-from scipy.optimize import linear_sum_assignment
-
-def confusion_matrix_clust(true_cat, clust_lab, normalize=False,
-                           margins_sums=False, margins_score=False):
-
-from sklearn.preprocessing import FunctionTransformer
-from scipy.optimize import linear_sum_assignment
-
-def conf_matr_max_diago(true_cat, clust_lab, normalize=False):
-
-    ### Count the number of articles in eact categ/clust pair
-    cross_tab = pd.crosstab(true_cat, clust_lab,
-                            normalize=normalize)
-
-    ### Rearrange the lines and columns to maximize the diagonal values sum
-    # Take the invert values in the matrix
-    func = lambda x: 1/(x+0.0000001)
-    inv_func = lambda x: (1/x) - 0.0000001
-    funct_trans = FunctionTransformer(func, inv_func)
-    inv_df = funct_trans.fit_transform(cross_tab)
-
-    # Use hungarian algo to find ind and row order that minimizes inverse
-    # of the diag vals -> max diag vals
-    row_ind, col_ind = linear_sum_assignment(inv_df.values)
-    inv_df = inv_df.loc[inv_df.index[row_ind],
-                        inv_df.columns[col_ind]]
-
-    # Take once again inverse to go back to original values
-    cross_tab = funct_trans.inverse_transform(inv_df)
-    result = cross_tab.copy(deep='True')
-
-    if normalize == False:
-        result = result.round(0).astype(int)
-
-    return result
-
 '''
 Function that takes a pd.Series of labels (same number of different labels
 in each column) and attribute a harmonized set of names to all the columns.
@@ -978,18 +930,74 @@ def categ_identificator(df_labels, true_cat=None):
     return df_
 
 
+'''
+Takes two series giving for each row :
+- the true label
+- the cluster label
+Then computes the matrix counting each pair of true category/ cluster label.
+Then reorder the lines and columns in order to have maximum diagonal.
+The best bijective correspondance between categories and clusters is obtained by
+ list(zip(result.columns, result.index))
+'''
+
+from sklearn.preprocessing import FunctionTransformer
+from scipy.optimize import linear_sum_assignment
+
+def conf_matr_max_diago(true_cat, clust_lab, normalize=False):
+
+    ### Count the number of articles in eact categ/clust pair
+    cross_tab = pd.crosstab(true_cat, clust_lab,
+                            normalize=normalize)
+
+    ### Rearrange the lines and columns to maximize the diagonal values sum
+    # Take the invert values in the matrix
+    func = lambda x: 1/(x+0.0000001)
+    inv_func = lambda x: (1/x) - 0.0000001
+    funct_trans = FunctionTransformer(func, inv_func)
+    inv_df = funct_trans.fit_transform(cross_tab)
+
+    # Use hungarian algo to find ind and row order that minimizes inverse
+    # of the diag vals -> max diag vals
+    row_ind, col_ind = linear_sum_assignment(inv_df.values)
+    inv_df = inv_df.loc[inv_df.index[row_ind],
+                        inv_df.columns[col_ind]]
+
+    # Take once again inverse to go back to original values
+    cross_tab = funct_trans.inverse_transform(inv_df)
+    result = cross_tab.copy(deep='True')
+
+    if normalize == False:
+        result = result.round(0).astype(int)
+
+    return result
+
+
+'''
+Takes two series giving for each row :
+- the true label
+- the cluster label
+Then computes the matrix counting each pair of true category/ cluster label.
+Then reorder the lines and columns in order to have maximum diagonal.
+The best bijective correspondance between categories and clusters is obtained by
+ list(zip(result.columns, result.index))
+'''
+
+from sklearn.preprocessing import FunctionTransformer
+from scipy.optimize import linear_sum_assignment
+
 def plot_conf_matrix_cat_vs_clust(true_cat, clust_lab, normalize=False,
                                   margins_sums=False, margins_score=False):
 
-    result = conf_matr_max_diago(true_cat, clust_lab, normalize=normalize)
+    cross_tab = conf_matr_max_diago(true_cat, clust_lab, normalize=normalize)
+    result = cross_tab.copy('deep')
 
     if margins_sums:
         # assign the sums margins to the result dataframe
-        marg_sum_vert = result[result.columns].sum(1)
+        marg_sum_vert = cross_tab[cross_tab.columns].sum(1)
         result = result.assign(cat_sum=marg_sum_vert)
-        marg_sum_hor = result.loc[result.index].sum(0)
+        marg_sum_hor = cross_tab.loc[cross_tab.index].sum(0)
         result = result.append(pd.Series(marg_sum_hor,
-                                         index=result.columns,
+                                         index=cross_tab.columns,
                                          name='clust_sum'))
 
     if margins_score:
@@ -1049,6 +1057,8 @@ NB: if the model wa already fitted, does not refit.'''
 import seaborn as sns
 from sklearn.manifold import trustworthiness
 from sklearn.preprocessing import LabelEncoder
+import matplotlib.patches as mpatches
+from matplotlib.lines import Line2D
 
 def plot_projection_cat_clust(df, model=None, ser_clust = None, true_cat=None,
                               proj='PCA', tw_n_neigh=5, title=None, figsize=(5, 3),
@@ -1152,25 +1162,27 @@ def plot_projection_cat_clust(df, model=None, ser_clust = None, true_cat=None,
                        marker=r"$ {} $".format(i+1),
                        c='k', alpha=1, s=70, zorder=100)
         
+        alphabet = 'abcdefghijklm'
         # clusters centers
         for i, name_clust, col in zip(range(len(clust_list)), clust_list, c2):
+
             # Showing the clusters centers
             ax.scatter(cent_clust_df.iloc[:, 0].loc[name_clust],
                        cent_clust_df.iloc[:, 1].loc[name_clust],
                        marker='o', c='lightgrey', alpha=0.7, s=size,
                        edgecolor=col, linewidths=edgelinesize,
-                       label="{}: {} | tw={:0.2f}".format(i, name_clust,
+                       label="{}: {} | tw={:0.2f}".format(alphabet[i+1], name_clust,
                                                           ser_tw_clust[name_clust]),
                        zorder=10) # for the labels only
             ax.scatter(cent_clust_df.iloc[:, 0].loc[name_clust],
                        cent_clust_df.iloc[:, 1].loc[name_clust],
-                       marker='o', c=col, alpha=0.7, s=centersize,
+                       marker='o', c=col, alpha=1, s=centersize,
                        edgecolor='k', zorder=20) # to plot the circle
             # Showing the categories centers labels (number)
             ax.scatter(cent_clust_df.iloc[:, 0].loc[name_clust],
                        cent_clust_df.iloc[:, 1].loc[name_clust],
-                       marker=r"$ {} $".format(i+1),
-                       c='dimgrey', alpha=1, s=70, zorder=100)
+                       marker=r"$ {} $".format(alphabet[i+1]),
+                       c='k', alpha=0.8, s=70, zorder=100)
 
         # link between the centers
         for n_cat, n_clust in zip(cat_list, clust_list):
@@ -1181,12 +1193,24 @@ def plot_projection_cat_clust(df, model=None, ser_clust = None, true_cat=None,
             plt.plot([x1, x2], [y1, y2],
                      color='k', linewidth=1)
 
+        # add manually defined new patch
+        # patch = mpatches.Patch(color='grey', label='Manual Label')
+        patches = [Line2D([0], [0], marker=r"$ {} $".format('1'),
+                          color='k', label='category centers', lw=0,
+                          markerfacecolor='w', markersize=7), 
+                   Line2D([0], [0], marker=r"$ {} $".format('a'),
+                          color='k', label='cluster centers', lw=0,
+                          markerfacecolor='w', markersize=7)]
+        handles, _ = ax.get_legend_handles_labels()
+        handles.extend(patches) # append manual patches
+
         if legend_on:
             plt.legend().get_frame().set_alpha(0.3)
             if bboxtoanchor is not None:
-                plt.legend(bbox_to_anchor=bboxtoanchor)
+                plt.legend(handles=handles,
+                           bbox_to_anchor=bboxtoanchor)
             else: 
-                plt.legend()
+                plt.legend(handles=handles,)
 
     # b2 - if no ser_clust: only plot points in grey
     else:
@@ -1909,7 +1933,7 @@ class GridSearchClust(BaseEstimator, TransformerMixin):
             best_model = self.__get_best_estimator(optim_score)
 
         # use the .predict method of the best estimator on the best model
-        return best_model.predict(X)
+        return best_model.fit_predict(X)
 
 
 '''Takes a dataframe of clusters number (prediction) for a set of observation, 
@@ -2157,11 +2181,10 @@ def plot_2D_gsclust_param_opt(gsc, params=None, score=None, fmt='.4g',
 
     score = 'refit_score' if score is None else score
 
-    params_gsc = params
-
-    _, _, _, df_res = filters_gsclust_results(gsc, params_gsc[0],
-                                              return_df_res=True)
-    max_scores = df_res.groupby(params_gsc).agg(lambda x: max(x))[score]
+    _, _, df_res = get_best_params(gsc, None)
+    obj_cols = df_res.select_dtypes(include=['object']).columns
+    df_res[obj_cols] = df_res[obj_cols].applymap(lambda x: str(x))
+    max_scores = df_res.groupby(params).agg(lambda x: max(x))[score]
     sns.heatmap(max_scores.unstack(), annot=True, fmt=fmt, ax=ax)
 
     if shorten_label != False:
@@ -2176,50 +2199,218 @@ def plot_2D_gsclust_param_opt(gsc, params=None, score=None, fmt='.4g',
     title = score if title is None else title
     ax.set_title(title)
 
-# from sklearn.cluster import KMeans
 
-# def clustering_doc_matrix(doc_matrix_df, name, n_clusters=7):
-#     # Creating the Kmeans model
-#     km = KMeans(n_clusters = n_clusters)
-#     # Fitting the Kmeans model
-#     km.fit(doc_matrix_df)
-#     ser = pd.Series(km.labels_,
-#                     index = doc_matrix_df.index,
-#                     name = name)
-#     return ser
+''' Takes an image, resizes the image and fills the non existing space
+with custom color 
+'''
+import cv2
+import numpy as np
+from PIL import Image, ImageOps
+from PIL.ImageFilter import GaussianBlur
 
-# from sklearn.decomposition import NMF
-# from sklearn.decomposition import LatentDirichletAllocation as LDA
-# from sklearn.decomposition import TruncatedSVD
+def resize_sq_fill_image(img, sq_size=224, fill_col=(255,255,255),
+                 interpolation=Image.ANTIALIAS):
+    
+    # can be PIL.Image.Image or np.array
+    if type(img) == np.ndarray:
+        img = Image.fromarray(img)
+    elif type(img) == PIL.Image.Image:
+        pass
+    else:
+        print("ERROR: image format unknown, please give np.array or PIL.Image.Image")
+    # PIL.Image.Image format from here
 
-# def topicsmodeler_doc_matrix(doc_matrix_df, n_model, name, n_components=7):
+    w, h = img.size
+    if h != w:
+        dif = h if h > w else w
+        new_img = Image.new('RGB', (dif, dif), fill_col)
+        new_img.paste(img, (int((dif - w) / 2), int((dif - h) / 2)))
+        img = new_img
+    
+    # Change format to np.array and resize with cv2
+    new_img = cv2.resize(np.asarray(img), (sq_size, sq_size), interpolation)
+    return np.array(new_img)
 
-#     dict_models = {'lsa': TruncatedSVD(),
-#                    'nmf': NMF(init="nndsvd"),
-#                    'lda': LDA()}
-#     model = dict_models[n_model]
+def equalize_hist(img, clahe_on=False, gridsize=3, clipLimit=2.0):
 
-#     # Instantiation the topic modeler
-#     model.set_params(n_components = n_components)
+    if clahe_on:
+        clahe = cv2.createCLAHE(clipLimit=clipLimit,
+                                tileGridSize=(gridsize,
+                                              gridsize))
 
-#     # Fitting the the topic modeler
-#     model.fit(doc_matrix_df)
+    if len(img.shape)==3:
 
-#     # DOCUMENTS/TOPICS Matrix
-#     W = pd.DataFrame(model.fit_transform(doc_matrix_df.values),
-#                      index=doc_matrix_df.index, # documents
-#                      columns=['topic_'+str(i)\
-#                               for i in range(1,n_components+1)]) # topics
+        # -> RGB image
+        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB) # RGB to LAB
+        lab_planes = cv2.split(lab)
+        if clahe_on: # contrast limited adaptative histograme equalizer
+            lab_planes[0] = clahe.apply(lab_planes[0])
+        else: # simple global histogram equalizer
+            lab_planes[0] = cv2.equalizeHist(lab_planes[0])
+        lab = cv2.merge(lab_planes)
+        new_img = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR) # convert to bgr
 
-#     # TOPICS/WORDS Matrix
-#     H = pd.DataFrame(model.components_,
-#                      index=['topic_'+str(i)\
-#                             for i in range(1,n_components+1)], # topics
-#                      columns=doc_matrix_df.columns) # words
+    elif len(img.shape)==2:
 
-#     # Converting topics scores to best cluster label (higher val column)
-#     ser_res = pd.Series(W.idxmax(1),
-#                         index = W.index,
-#                         name = name)
+        # -> grey scale image
+        if clahe_on:
+            new_img = clahe.apply(img)
+        else:
+            new_img = cv2.equalizeHist(img)
 
-#     return ser_res
+    return new_img
+
+def apply_threshold(img):
+
+    new_img = copy.deepcopy(img)
+
+    if len(img.shape)==3:
+        new_img = cv2.cvtColor(new_img, cv2.COLOR_RGB2GRAY)
+
+    ret, thresh = cv2.threshold(new_img, 0, 255,
+                                cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    ## adaptive thershold
+    # thresh = cv2.adaptiveThreshold(img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+    #                                cv2.THRESH_BINARY,11,2)
+    
+    return thresh
+
+
+def gauss_blur(img, radius): 
+    return cv2.GaussianBlur(img, (radius, radius),0)
+
+def med_blur(img, radius):
+    return cv2.medianBlur(img, radius)
+
+def rgb_to_grey(img):
+    return cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+
+def fast_non_loc_means_denois(img):
+    return cv2.fastNlMeansDenoising(img)
+
+''' Takes an image and apply a chosen sequence of transformations
+'''
+
+import cv2
+import numpy as np
+from PIL import Image
+
+def preproc_image(img, list_preproc_tup): # {'list_preproc_tup': xxxx}
+
+    new_img = copy.deepcopy(img)
+    dict_transf = {'resize': resize_sq_fill_image,
+                   'gauss_bl': gauss_blur,
+                   'med_bl': med_blur,
+                   'rgb_to_grey': rgb_to_grey,
+                   'nl_denois': fast_non_loc_means_denois,
+                   'equalize' : equalize_hist,
+                   'thresh': apply_threshold,
+                   }
+
+    for name, dict_params in list_preproc_tup:
+        new_img = dict_transf[name](new_img, **dict_params)
+
+    return np.array(new_img)
+
+    '''
+Show one image through specific preproc function and preproc params
+'''
+def show_img_and_hist(img_orig=None, img=None, rgb_hist_on=True, figsize=(8,4),
+                      preproc_func=None, preproc_params=None):
+
+    # if img_orig -> preproc to apply
+    if img_orig is not None:
+        fig = plt.figure(figsize=figsize)
+        ax1, ax2, ax3, ax4  = fig.add_subplot(221),\
+                                fig.add_subplot(222),\
+                                fig.add_subplot(223),\
+                                fig.add_subplot(224)
+
+        if preproc_func is None:
+            print("BEWARE, no preprocessing function was given")
+        img = preproc_func(img_orig, **preproc_params)
+                            
+        ax1.imshow(img_orig, cmap='gray')
+        ax3.imshow(img, cmap='gray')
+        
+        if rgb_hist_on and len(img_orig.shape)==3:
+        # Show the 3 histograms (rgb)
+            for i, col in enumerate(['r', 'g', 'b']):
+                ax2.hist(img_orig[:,:,i].flatten(), bins=range(256),
+                            color=col, alpha = 0.5, zorder=10)
+        if rgb_hist_on and len(img.shape)==3:
+        # Show the 3 histograms (rgb)
+            for i, col in enumerate(['r', 'g', 'b']):
+                ax4.hist(img[:,:,i].flatten(), bins=range(256),
+                            color=col, alpha = 0.5, zorder=10)
+        # show global histogram
+        ax2.hist(img_orig.flatten(), bins=range(256), color='dimgrey')
+        ax4.hist(img.flatten(), bins=range(256), color='dimgrey')
+
+        ax1.set_title('Original image')
+        ax2.set_title('Original histogram')
+        ax3.set_title(f'Image after preprocessing')
+        ax4.set_title(f'Histogram after preprocessing')
+
+    else: # show img only
+
+        if img is not None:
+            fig = plt.figure(figsize=figsize)
+            ax1, ax2 = fig.add_subplot(121), fig.add_subplot(122)
+            ax1.imshow(img, cmap='Greys_r')
+        else:
+            print("ERROR: No image given at all !!!")
+        
+        if rgb_hist_on and len(img.shape)==3:
+        # Show the 3 histograms (rgb)
+            for i, col in enumerate(['r', 'g', 'b']):
+                ax2.hist(img[:,:,i].flatten(), bins=range(256),
+                            color=col, alpha = 0.5, zorder=10)
+        # show only global histogram
+        ax2.hist(img.flatten(), bins=range(256), color='dimgrey')
+
+        ax1.set_title(f'Image')
+        ax2.set_title(f'Histogram')
+
+    plt.tight_layout()
+    plt.show()
+
+    ''' can be used to test preprocessing on representative samples
+of each category
+'''
+
+def print_thumbnails_from_df(ser_pict, li_files, preproc_func=None,
+                             preproc_params=None, n_rows=1,
+                             figsize=(15,2), fig=None, title=None):
+
+    n_tot = len(li_files)
+    n_cols = (n_tot//n_rows)+((n_tot%n_rows)>0)*1
+    fig = plt.figure(figsize=figsize) if fig is None else fig
+    for i, ind in enumerate(li_files,1):
+        img = ser_pict.loc[ind]
+        if preproc_func is not None:
+            img = preproc_func(img, **preproc_params)
+        ax = fig.add_subplot(n_rows,n_cols,i)
+        if len(img.shape)==3:
+            ax.imshow(img)
+        else:
+            ax.imshow(img, cmap='Greys_r')
+        ax.set_axis_off()
+        if title is not None:
+            plt.suptitle(title, fontweight='bold')
+    plt.show()
+
+
+def print_sample_by_from_df(ser_pict, sercat, n_img=10, n_rows=1,
+                            preproc_func=None, preproc_params=None,
+                            figsize=(20,2)):
+
+    gb = ser_pict.groupby(sercat)
+    for name, sub_df in gb:
+        li_files = sub_df.sample(n_img).index
+        print_thumbnails_from_df(ser_pict, li_files,
+                                 preproc_func,
+                                 preproc_params,
+                                 n_rows=n_rows,
+                                 figsize=figsize,
+                                 title=name)
