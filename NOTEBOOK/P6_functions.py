@@ -1449,7 +1449,8 @@ class CustNLPTransformer(BaseEstimator, TransformerMixin):
     def __init__(self, stopwords=None, keep_tags=None, stemmer=None,
                  lemmatizer=None, min_df=0, max_df=1.0, max_features=None,
                  tfidf_on=False, ngram_range=(1,1), binary=False,
-                 w2v=None, pname_weight=0.5):
+                 w2v=None, path_wiki2vec="content/enwiki_20180420_100d.pkl",
+                 pname_weight=0.5):
         
         self.stopwords = stopwords
         self.keep_tags = keep_tags
@@ -1462,6 +1463,7 @@ class CustNLPTransformer(BaseEstimator, TransformerMixin):
         self.ngram_range = ngram_range
         self.binary = binary
         self.w2v = w2v
+        self.path_wiki2vec = path_wiki2vec
         self.pname_weight = pname_weight
         self.preproc_func_params={'stopwords': self.stopwords,
                                   'keep_tags': self.keep_tags,
@@ -1587,7 +1589,7 @@ class CustNLPTransformer(BaseEstimator, TransformerMixin):
                         fill_value=0)
         # if word_embedding is enabled, projection of the BOW on a given w2v
         if self.w2v:
-            wiki2vec = Wikipedia2Vec.load("../DATA/enwiki_20180420_100d.pkl")
+            wiki2vec = Wikipedia2Vec.load(self.path_wiki2vec)
             df_trans = proj_term_doc_on_w2v(df_trans, wiki2vec,
                                             print_opt=False)
         return df_trans
@@ -2288,7 +2290,8 @@ def rgb_to_grey(img):
 def fast_non_loc_means_denois(img):
     return cv2.fastNlMeansDenoising(img)
 
-''' Takes an image and apply a chosen sequence of transformations
+'''
+Takes an image and apply a chosen sequence of transformations
 '''
 
 import cv2
