@@ -49,7 +49,7 @@ and plots a wordcloud of the (n_top_words) top words for each topic.
 
 from wordcloud import WordCloud
 
-def plot_wordclouds_topwords(H, n_top_words, n_rows=1, figsize=(18,8),
+def plot_wordclouds_from_H(H, n_top_words, n_rows=1, figsize=(18,8),
                              random_state=None):
 
     fig = plt.figure(figsize=figsize)
@@ -70,6 +70,45 @@ def plot_wordclouds_topwords(H, n_top_words, n_rows=1, figsize=(18,8),
         plt.title(topic_name, fontweight='bold')
         
     plt.show()
+
+'''Takes a groupby made on a series of texts (non tokenized),
+(-> for example : gb = df_desc_cat.groupby('category')['desc_clean'])
+extracts the n top words and plots a wordcloud of the (n_top_words)
+top words for each topic.
+'''
+
+from wordcloud import WordCloud
+
+def plot_wordclouds_from_gb(gb, n_top_words, n_rows=1, figsize=(18,8),
+                             backgnd_color='black', cmap='Dark2',
+                            random_state=None):
+
+    fig = plt.figure(figsize=figsize)
+
+    for i, tup in enumerate(gb,1):
+        n_topic, ser_texts = tup
+        # creation of a corpus of all the cleaned descriptions and product_names
+        corpus = ' '.join(ser_texts.values)
+        # tokenizing the words in the cleaned corpus
+        tokenizer = nltk.RegexpTokenizer(r'[a-z]+')
+        li_words = tokenizer.tokenize(corpus.lower())
+        # counting frequency of each word
+        ser_freq = pd.Series(nltk.FreqDist(li_words))
+
+        wc = WordCloud(stopwords=None, background_color=backgnd_color,
+                        colormap=cmap, max_font_size=150,
+                        random_state=14)
+        ser_topic = ser_freq\
+            .sort_values(ascending=False)[0:n_top_words]
+        wc.generate(' '.join(list(ser_topic.index)))
+
+        n_tot = len(gb)
+        n_cols = (n_tot//n_rows)+((n_tot%n_rows)>0)*1
+        ax = fig.add_subplot(n_rows,n_cols,i)
+        plt.imshow(wc, interpolation="bilinear")
+        plt.axis("off")
+        plt.tight_layout()
+        plt.title(n_topic, fontweight='bold')
 
 '''
 t-SNE wrapper in order to use t-SNE as a dimension reducter as a pipeline step of a 
