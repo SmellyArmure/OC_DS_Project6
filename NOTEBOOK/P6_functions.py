@@ -2423,7 +2423,8 @@ of each category
 
 def print_thumbnails_from_df(ser_pict, li_files, preproc_func=None,
                              preproc_params=None, n_rows=1,
-                             figsize=(15,2), fig=None, title=None):
+                             figsize=(15,2), fig=None,
+                             li_im_title=None, title=None):
 
     n_tot = len(li_files)
     n_cols = (n_tot//n_rows)+((n_tot%n_rows)>0)*1
@@ -2435,8 +2436,12 @@ def print_thumbnails_from_df(ser_pict, li_files, preproc_func=None,
         ax = fig.add_subplot(n_rows,n_cols,i)
         if len(img.shape)==3:
             ax.imshow(img)
+            if li_im_title is not None:
+                ax.set_title(li_im_title[i-1])
         else:
             ax.imshow(img, cmap='Greys_r')
+            if li_im_title is not None:
+                ax.set_title(li_im_title[i-1])
         ax.set_axis_off()
         if title is not None:
             plt.suptitle(title, fontweight='bold')
